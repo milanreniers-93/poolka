@@ -1,4 +1,4 @@
--- Foreign Key Constraints
+-- Foreign Key Constraints (Updated for auth.users)
 
 -- Organizations
 ALTER TABLE organizations
@@ -8,7 +8,7 @@ ALTER TABLE organizations
 -- Profiles
 ALTER TABLE profiles
     ADD CONSTRAINT profiles_id_fkey 
-    FOREIGN KEY (id) REFERENCES users(id) ON DELETE CASCADE;
+    FOREIGN KEY (id) REFERENCES auth.users(id) ON DELETE CASCADE;
 
 ALTER TABLE profiles
     ADD CONSTRAINT profiles_organization_id_fkey 
@@ -25,12 +25,12 @@ ALTER TABLE cars
 
 ALTER TABLE cars
     ADD CONSTRAINT cars_user_id_fkey 
-    FOREIGN KEY (user_id) REFERENCES users(id);
+    FOREIGN KEY (user_id) REFERENCES auth.users(id);
 
 -- Bookings
 ALTER TABLE bookings
     ADD CONSTRAINT bookings_user_id_fkey 
-    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE;
+    FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 
 ALTER TABLE bookings
     ADD CONSTRAINT bookings_car_id_fkey 
@@ -47,7 +47,7 @@ ALTER TABLE car_damages
 
 ALTER TABLE car_damages
     ADD CONSTRAINT car_damages_reported_by_fkey 
-    FOREIGN KEY (reported_by) REFERENCES users(id);
+    FOREIGN KEY (reported_by) REFERENCES auth.users(id);
 
 -- Damage coordinates
 ALTER TABLE damage_coordinates
@@ -61,7 +61,7 @@ ALTER TABLE damage_media
 
 ALTER TABLE damage_media
     ADD CONSTRAINT damage_media_uploaded_by_fkey 
-    FOREIGN KEY (uploaded_by) REFERENCES users(id);
+    FOREIGN KEY (uploaded_by) REFERENCES auth.users(id);
 
 -- Fuel transactions
 ALTER TABLE fuel_transactions
@@ -70,7 +70,7 @@ ALTER TABLE fuel_transactions
 
 ALTER TABLE fuel_transactions
     ADD CONSTRAINT fuel_transactions_user_id_fkey 
-    FOREIGN KEY (user_id) REFERENCES users(id);
+    FOREIGN KEY (user_id) REFERENCES auth.users(id);
 
 ALTER TABLE fuel_transactions
     ADD CONSTRAINT fuel_transactions_booking_id_fkey 
@@ -83,11 +83,11 @@ ALTER TABLE maintenance_records
 
 ALTER TABLE maintenance_records
     ADD CONSTRAINT maintenance_records_scheduled_by_fkey 
-    FOREIGN KEY (scheduled_by) REFERENCES users(id);
+    FOREIGN KEY (scheduled_by) REFERENCES auth.users(id);
 
 ALTER TABLE maintenance_records
     ADD CONSTRAINT maintenance_records_completed_by_fkey 
-    FOREIGN KEY (completed_by) REFERENCES users(id);
+    FOREIGN KEY (completed_by) REFERENCES auth.users(id);
 
 -- Trip analytics
 ALTER TABLE trip_analytics
@@ -100,7 +100,7 @@ ALTER TABLE trip_analytics
 
 ALTER TABLE trip_analytics
     ADD CONSTRAINT trip_analytics_user_id_fkey 
-    FOREIGN KEY (user_id) REFERENCES users(id);
+    FOREIGN KEY (user_id) REFERENCES auth.users(id);
 
 -- Vehicle expenses
 ALTER TABLE vehicle_expenses
@@ -109,7 +109,7 @@ ALTER TABLE vehicle_expenses
 
 ALTER TABLE vehicle_expenses
     ADD CONSTRAINT vehicle_expenses_user_id_fkey 
-    FOREIGN KEY (user_id) REFERENCES users(id);
+    FOREIGN KEY (user_id) REFERENCES auth.users(id);
 
 ALTER TABLE vehicle_expenses
     ADD CONSTRAINT vehicle_expenses_booking_id_fkey 
@@ -126,7 +126,7 @@ ALTER TABLE vehicle_inspections
 
 ALTER TABLE vehicle_inspections
     ADD CONSTRAINT vehicle_inspections_inspector_user_id_fkey 
-    FOREIGN KEY (inspector_user_id) REFERENCES users(id);
+    FOREIGN KEY (inspector_user_id) REFERENCES auth.users(id);
 
 ALTER TABLE vehicle_inspections
     ADD CONSTRAINT vehicle_inspections_booking_id_fkey 

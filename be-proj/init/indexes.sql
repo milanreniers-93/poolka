@@ -1,8 +1,5 @@
 -- Create indexes for better performance
 
--- User indexes
-CREATE INDEX idx_users_email ON users USING btree (email);
-
 -- Organization indexes
 CREATE INDEX idx_organizations_status ON organizations USING btree (status);
 

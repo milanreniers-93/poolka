@@ -1,4 +1,24 @@
--- Utility functions and triggers
+-- Updated functions for auth.users
+
+-- Function to handle new user registration (creates profile automatically)
+CREATE OR REPLACE FUNCTION handle_new_user() 
+RETURNS TRIGGER AS $$
+BEGIN
+  INSERT INTO public.profiles (id, email, first_name, last_name)
+  VALUES (
+    NEW.id, 
+    NEW.email,
+    COALESCE(NEW.raw_user_meta_data->>'first_name', split_part(NEW.email, '@', 1)),
+    COALESCE(NEW.raw_user_meta_data->>'last_name', '')
+  );
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- Trigger for automatic profile creation on auth.users
+CREATE TRIGGER on_auth_user_created
+  AFTER INSERT ON auth.users
+  FOR EACH ROW EXECUTE FUNCTION handle_new_user();
 
 -- Function to update updated_at columns
 CREATE OR REPLACE FUNCTION update_updated_at_column()
@@ -49,26 +69,6 @@ CREATE TRIGGER update_vehicle_inspections_updated_at
     BEFORE UPDATE ON vehicle_inspections 
     FOR EACH ROW 
     EXECUTE FUNCTION update_updated_at_column();
-
--- Function to handle new user registration (creates profile automatically)
-CREATE OR REPLACE FUNCTION handle_new_user() 
-RETURNS TRIGGER AS $$
-BEGIN
-  INSERT INTO profiles (id, email, first_name, last_name)
-  VALUES (
-    NEW.id, 
-    NEW.email,
-    COALESCE(split_part(NEW.email, '@', 1), 'User'), -- Use email prefix as first name fallback
-    ''
-  );
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
-
--- Trigger for automatic profile creation
-CREATE TRIGGER on_auth_user_created
-  AFTER INSERT ON users
-  FOR EACH ROW EXECUTE FUNCTION handle_new_user();
 
 -- Function to check booking conflicts
 CREATE OR REPLACE FUNCTION check_booking_conflicts(
