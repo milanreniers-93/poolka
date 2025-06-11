@@ -7,13 +7,7 @@ const rateLimit = require('express-rate-limit');
 const morgan = require('morgan');
 
 // Import routes
-<<<<<<< HEAD
-<<<<<<< HEAD
 const { router: authRoutes } = require('./routes/auth');
-=======
->>>>>>> 5ca7e49a23da53190a11dab9b09fa9e058446761
-=======
->>>>>>> ed03e63136c89fbc450706eac04600a593c9c92a
 const bookingRoutes = require('./routes/bookings');
 const carRoutes = require('./routes/cars');
 const profileRoutes = require('./routes/profiles');
@@ -58,13 +52,7 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // API Routes
 app.use('/api/health', healthRoutes);
-<<<<<<< HEAD
-<<<<<<< HEAD
 app.use('/api/auth', authRoutes);
-=======
->>>>>>> 5ca7e49a23da53190a11dab9b09fa9e058446761
-=======
->>>>>>> ed03e63136c89fbc450706eac04600a593c9c92a
 app.use('/api/bookings', bookingRoutes);
 app.use('/api/cars', carRoutes);
 app.use('/api/profiles', profileRoutes);
