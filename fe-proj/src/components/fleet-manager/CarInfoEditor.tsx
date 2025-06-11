@@ -1,7 +1,7 @@
-// src/components/fleet-manager/CarInfoEditor.tsx - Clean version without syntax errors
+// src/components/fleet-manager/CarInfoEditor.tsx - Migrated to use backend API
 import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { supabase } from '@/lib/supabase';
+import { api } from '@/lib/api'; // ✅ Import API client instead of supabase
 import { useAuth } from '@/contexts/auth/AuthContext';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -67,44 +67,43 @@ const CarInfoEditor: React.FC = () => {
     notes: ''
   });
 
-  // Fetch cars
+  // ✅ MIGRATED: Fetch cars using backend API
   const { data: cars, isLoading } = useQuery({
     queryKey: ['cars', profile?.organization_id],
     queryFn: async () => {
       if (!profile?.organization_id) return [];
       
-      const { data, error } = await supabase
-        .from('cars')
-        .select('*')
-        .eq('organization_id', profile.organization_id)
-        .order('make', { ascending: true });
-
-      if (error) throw error;
-      return data as Car[];
+      console.log('🚗 Fetching cars from backend API for organization:', profile.organization_id);
+      
+      // ✅ Use backend API instead of direct Supabase
+      const carsData = await api.fleet.getCars(profile.organization_id);
+      
+      console.log('✅ Cars received from backend:', carsData?.length || 0);
+      
+      return carsData as Car[];
     },
     enabled: !!profile?.organization_id
   });
 
-  // Add car mutation
+  // ✅ MIGRATED: Add car using backend API
   const addCarMutation = useMutation({
     mutationFn: async (carData: CarFormData) => {
       if (!profile?.organization_id || !profile?.id) {
         throw new Error('Missing organization or user ID');
       }
 
-      const { data, error } = await supabase
-        .from('cars')
-        .insert({
-          ...carData,
-          organization_id: profile.organization_id,
-          user_id: profile.id,
-          status: 'available'
-        })
-        .select()
-        .single();
+      console.log('➕ Creating car via backend API:', carData);
 
-      if (error) throw error;
-      return data;
+      // ✅ Use backend API instead of direct Supabase
+      const newCar = await api.fleet.createCar({
+        ...carData,
+        organization_id: profile.organization_id,
+        user_id: profile.id,
+        status: 'available'
+      });
+
+      console.log('✅ Car created successfully:', newCar.id);
+      return newCar;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['cars'] });
@@ -116,26 +115,37 @@ const CarInfoEditor: React.FC = () => {
       });
     },
     onError: (error: any) => {
+      console.error('❌ Error adding car:', error);
+      
+      let errorMessage = 'Failed to add car';
+      if (error.message?.includes('duplicate')) {
+        errorMessage = 'A car with this license plate already exists';
+      } else if (error.message?.includes('validation')) {
+        errorMessage = 'Please check your car details and try again';
+      } else if (error.message?.includes('unauthorized')) {
+        errorMessage = 'You do not have permission to add cars';
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
+      
       toast({
         title: "Error adding car",
-        description: error.message,
+        description: errorMessage,
         variant: "destructive",
       });
     }
   });
 
-  // Update car mutation
+  // ✅ MIGRATED: Update car using backend API
   const updateCarMutation = useMutation({
     mutationFn: async ({ id, updates }: { id: string; updates: Partial<CarFormData> }) => {
-      const { data, error } = await supabase
-        .from('cars')
-        .update(updates)
-        .eq('id', id)
-        .select()
-        .single();
-
-      if (error) throw error;
-      return data;
+      console.log('✏️ Updating car via backend API:', { id, updates });
+      
+      // ✅ Use backend API instead of direct Supabase
+      const updatedCar = await api.fleet.updateCar(id, updates);
+      
+      console.log('✅ Car updated successfully:', updatedCar.id);
+      return updatedCar;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['cars'] });
@@ -147,23 +157,38 @@ const CarInfoEditor: React.FC = () => {
       });
     },
     onError: (error: any) => {
+      console.error('❌ Error updating car:', error);
+      
+      let errorMessage = 'Failed to update car';
+      if (error.message?.includes('duplicate')) {
+        errorMessage = 'A car with this license plate already exists';
+      } else if (error.message?.includes('validation')) {
+        errorMessage = 'Please check your car details and try again';
+      } else if (error.message?.includes('unauthorized')) {
+        errorMessage = 'You do not have permission to update this car';
+      } else if (error.message?.includes('not found')) {
+        errorMessage = 'Car not found. It may have been deleted.';
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
+      
       toast({
         title: "Error updating car",
-        description: error.message,
+        description: errorMessage,
         variant: "destructive",
       });
     }
   });
 
-  // Delete car mutation
+  // ✅ MIGRATED: Delete car using backend API
   const deleteCarMutation = useMutation({
     mutationFn: async (carId: string) => {
-      const { error } = await supabase
-        .from('cars')
-        .delete()
-        .eq('id', carId);
-
-      if (error) throw error;
+      console.log('🗑️ Deleting car via backend API:', carId);
+      
+      // ✅ Use backend API instead of direct Supabase
+      await api.fleet.deleteCar(carId);
+      
+      console.log('✅ Car deleted successfully');
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['cars'] });
@@ -173,9 +198,22 @@ const CarInfoEditor: React.FC = () => {
       });
     },
     onError: (error: any) => {
+      console.error('❌ Error deleting car:', error);
+      
+      let errorMessage = 'Failed to delete car';
+      if (error.message?.includes('has bookings')) {
+        errorMessage = 'Cannot delete car with existing bookings. Cancel or complete all bookings first.';
+      } else if (error.message?.includes('unauthorized')) {
+        errorMessage = 'You do not have permission to delete this car';
+      } else if (error.message?.includes('not found')) {
+        errorMessage = 'Car not found. It may have already been deleted.';
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
+      
       toast({
         title: "Error deleting car",
-        description: error.message,
+        description: errorMessage,
         variant: "destructive",
       });
     }
@@ -199,6 +237,16 @@ const CarInfoEditor: React.FC = () => {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    
+    // Basic validation
+    if (!formData.make.trim() || !formData.model.trim() || !formData.license_plate.trim()) {
+      toast({
+        title: "Validation error",
+        description: "Please fill in all required fields (Make, Model, License Plate)",
+        variant: "destructive",
+      });
+      return;
+    }
     
     if (editingCar) {
       updateCarMutation.mutate({ id: editingCar.id, updates: formData });
@@ -225,7 +273,7 @@ const CarInfoEditor: React.FC = () => {
   };
 
   const handleDelete = (carId: string) => {
-    if (confirm('Are you sure you want to delete this car?')) {
+    if (confirm('Are you sure you want to delete this car? This action cannot be undone.')) {
       deleteCarMutation.mutate(carId);
     }
   };
@@ -265,7 +313,7 @@ const CarInfoEditor: React.FC = () => {
               Fleet Management
             </CardTitle>
             <p className="text-sm text-gray-500 mt-1">
-              Manage your organization's vehicle fleet
+              Manage your organization's vehicle fleet ({cars?.length || 0} vehicles)
             </p>
           </div>
           <Dialog open={isAddDialogOpen || !!editingCar} onOpenChange={(open) => {
@@ -296,6 +344,7 @@ const CarInfoEditor: React.FC = () => {
                       value={formData.make}
                       onChange={(e) => setFormData(prev => ({ ...prev, make: e.target.value }))}
                       required
+                      placeholder="e.g., Toyota, BMW"
                     />
                   </div>
                   <div>
@@ -305,6 +354,7 @@ const CarInfoEditor: React.FC = () => {
                       value={formData.model}
                       onChange={(e) => setFormData(prev => ({ ...prev, model: e.target.value }))}
                       required
+                      placeholder="e.g., Camry, X3"
                     />
                   </div>
                   <div>
@@ -312,8 +362,10 @@ const CarInfoEditor: React.FC = () => {
                     <Input
                       id="year"
                       type="number"
+                      min="1900"
+                      max={new Date().getFullYear() + 1}
                       value={formData.year}
-                      onChange={(e) => setFormData(prev => ({ ...prev, year: parseInt(e.target.value) }))}
+                      onChange={(e) => setFormData(prev => ({ ...prev, year: parseInt(e.target.value) || new Date().getFullYear() }))}
                       required
                     />
                   </div>
@@ -322,8 +374,9 @@ const CarInfoEditor: React.FC = () => {
                     <Input
                       id="license_plate"
                       value={formData.license_plate}
-                      onChange={(e) => setFormData(prev => ({ ...prev, license_plate: e.target.value }))}
+                      onChange={(e) => setFormData(prev => ({ ...prev, license_plate: e.target.value.toUpperCase() }))}
                       required
+                      placeholder="e.g., ABC-123"
                     />
                   </div>
                   <div>
@@ -332,6 +385,7 @@ const CarInfoEditor: React.FC = () => {
                       id="color"
                       value={formData.color}
                       onChange={(e) => setFormData(prev => ({ ...prev, color: e.target.value }))}
+                      placeholder="e.g., Black, White"
                     />
                   </div>
                   <div>
@@ -339,8 +393,10 @@ const CarInfoEditor: React.FC = () => {
                     <Input
                       id="seats"
                       type="number"
+                      min="1"
+                      max="50"
                       value={formData.seats}
-                      onChange={(e) => setFormData(prev => ({ ...prev, seats: parseInt(e.target.value) }))}
+                      onChange={(e) => setFormData(prev => ({ ...prev, seats: parseInt(e.target.value) || 5 }))}
                       required
                     />
                   </div>
@@ -373,12 +429,13 @@ const CarInfoEditor: React.FC = () => {
                     </Select>
                   </div>
                   <div>
-                    <Label htmlFor="current_mileage">Current Mileage</Label>
+                    <Label htmlFor="current_mileage">Current Mileage (km)</Label>
                     <Input
                       id="current_mileage"
                       type="number"
+                      min="0"
                       value={formData.current_mileage}
-                      onChange={(e) => setFormData(prev => ({ ...prev, current_mileage: parseInt(e.target.value) }))}
+                      onChange={(e) => setFormData(prev => ({ ...prev, current_mileage: parseInt(e.target.value) || 0 }))}
                     />
                   </div>
                   <div>
@@ -387,8 +444,9 @@ const CarInfoEditor: React.FC = () => {
                       id="daily_rate"
                       type="number"
                       step="0.01"
+                      min="0"
                       value={formData.daily_rate}
-                      onChange={(e) => setFormData(prev => ({ ...prev, daily_rate: parseFloat(e.target.value) }))}
+                      onChange={(e) => setFormData(prev => ({ ...prev, daily_rate: parseFloat(e.target.value) || 0 }))}
                     />
                   </div>
                 </div>
@@ -399,6 +457,7 @@ const CarInfoEditor: React.FC = () => {
                     value={formData.notes}
                     onChange={(e) => setFormData(prev => ({ ...prev, notes: e.target.value }))}
                     rows={3}
+                    placeholder="Any additional notes about this vehicle..."
                   />
                 </div>
                 <div className="flex justify-end gap-2">
@@ -409,8 +468,18 @@ const CarInfoEditor: React.FC = () => {
                   }}>
                     Cancel
                   </Button>
-                  <Button type="submit" disabled={addCarMutation.isPending || updateCarMutation.isPending}>
-                    {editingCar ? 'Update Car' : 'Add Car'}
+                  <Button 
+                    type="submit" 
+                    disabled={addCarMutation.isPending || updateCarMutation.isPending}
+                  >
+                    {(addCarMutation.isPending || updateCarMutation.isPending) ? (
+                      <>
+                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                        {editingCar ? 'Updating...' : 'Adding...'}
+                      </>
+                    ) : (
+                      editingCar ? 'Update Car' : 'Add Car'
+                    )}
                   </Button>
                 </div>
               </form>
@@ -461,6 +530,7 @@ const CarInfoEditor: React.FC = () => {
                           variant="outline"
                           size="sm"
                           onClick={() => handleEdit(car)}
+                          disabled={updateCarMutation.isPending}
                         >
                           <Edit className="h-4 w-4" />
                         </Button>
@@ -468,6 +538,7 @@ const CarInfoEditor: React.FC = () => {
                           variant="outline"
                           size="sm"
                           onClick={() => handleDelete(car.id)}
+                          disabled={deleteCarMutation.isPending}
                         >
                           <Trash2 className="h-4 w-4" />
                         </Button>

@@ -1,7 +1,8 @@
-// src/contexts/auth/AuthContext.tsx - Fixed version with reliable loading states
-import React, { createContext, useContext, useEffect, useState, useRef } from 'react';
+// src/contexts/auth/AuthContext.tsx - Migrated to use backend API
+import React, { createContext, useContext, useEffect, useState } from 'react';
 import { User, Session } from '@supabase/supabase-js';
 import { supabase } from '@/lib/supabase';
+import { api } from '@/lib/api'; // ✅ Import our new API client
 import type {
   UserRole,
   Profile,
@@ -14,7 +15,6 @@ import type {
   OrganizationUpdate,
 } from './types';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL;
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const useAuth = () => {
@@ -31,60 +31,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [organization, setOrganization] = useState<Organization | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
-  const [initialized, setInitialized] = useState(false);
-  
-  // Use refs to track loading state and prevent race conditions
-  const isLoadingRef = useRef(false);
-  const loadingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-
-  // Safe loading state setter with timeout protection
-  const setLoadingWithTimeout = (isLoading: boolean, timeoutMs: number = 10000) => {
-    // Clear any existing timeout
-    if (loadingTimeoutRef.current) {
-      clearTimeout(loadingTimeoutRef.current);
-      loadingTimeoutRef.current = null;
-    }
-
-    setLoading(isLoading);
-    isLoadingRef.current = isLoading;
-
-    // If setting loading to true, add timeout protection
-    if (isLoading) {
-      loadingTimeoutRef.current = setTimeout(() => {
-        console.warn('AuthContext: Loading timeout - forcing loading to false');
-        if (isLoadingRef.current) {
-          setLoading(false);
-          isLoadingRef.current = false;
-        }
-      }, timeoutMs);
-    }
-  };
-
-  // Cleanup timeouts
-  useEffect(() => {
-    return () => {
-      if (loadingTimeoutRef.current) {
-        clearTimeout(loadingTimeoutRef.current);
-      }
-    };
-  }, []);
 
   useEffect(() => {
-    let isMounted = true;
-
-    // Get initial session
+    // Get initial session from Supabase (still needed for auth state)
     const getInitialSession = async () => {
       try {
         console.log('AuthContext: Getting initial session...');
-        
         const { data: { session }, error } = await supabase.auth.getSession();
-        
-        if (!isMounted) return;
         
         if (error) {
           console.error('AuthContext: Error getting session:', error);
-          setLoadingWithTimeout(false);
-          setInitialized(true);
+          setLoading(false);
           return;
         }
         
@@ -94,31 +51,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         
         if (session?.user) {
           console.log('AuthContext: Loading user data for initial session...');
-          await loadUserData(session.user.id, isMounted);
+          await loadUserData(session.user.id);
         } else {
-          setLoadingWithTimeout(false);
+          setLoading(false);
         }
-        
-        if (isMounted) {
-          setInitialized(true);
-        }
-        
       } catch (error) {
         console.error('AuthContext: Error in getInitialSession:', error);
-        if (isMounted) {
-          setLoadingWithTimeout(false);
-          setInitialized(true);
-        }
+        setLoading(false);
       }
     };
 
     getInitialSession();
 
-    // Listen for auth changes
+    // Listen for auth changes from Supabase
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
-        if (!isMounted) return;
-        
         console.log('AuthContext: Auth state changed:', event, session?.user?.email);
         
         setSession(session);
@@ -126,65 +73,71 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         
         if (session?.user) {
           console.log('AuthContext: User authenticated, loading data...');
-          setLoadingWithTimeout(true);
+          setLoading(true);
+          
+          const timeoutId = setTimeout(() => {
+            console.warn('AuthContext: loadUserData timeout - forcing loading to false');
+            setLoading(false);
+          }, 10000);
           
           try {
-            await loadUserData(session.user.id, isMounted);
+            await loadUserData(session.user.id);
+            clearTimeout(timeoutId);
           } catch (error) {
-            console.error('AuthContext: Error in auth state change:', error);
-            if (isMounted) {
-              setLoadingWithTimeout(false);
-            }
+            console.error('AuthContext: Error in auth state change loadUserData:', error);
+            clearTimeout(timeoutId);
+            setLoading(false);
           }
           
-          // Handle redirects after successful auth
           handlePostAuthRedirect(event);
         } else {
           console.log('AuthContext: User signed out, clearing data...');
           setProfile(null);
           setOrganization(null);
-          setLoadingWithTimeout(false);
+          setLoading(false);
         }
       }
     );
 
     return () => {
-      isMounted = false;
       subscription.unsubscribe();
     };
   }, []);
 
   const handlePostAuthRedirect = (event: string) => {
-    // Only redirect from landing page and only for specific events
     if ((event === 'SIGNED_UP' || event === 'SIGNED_IN') && window.location.pathname === '/') {
       console.log('AuthContext: Redirecting from landing page to dashboard');
-      // Use a small delay to ensure state is updated
       setTimeout(() => {
         window.location.href = '/dashboard';
       }, 100);
     }
   };
 
-  const loadUserData = async (userId: string, isMounted: boolean = true) => {
+  // ✅ TEMPORARY: Use Supabase directly for profile loading until backend is ready
+  const loadUserData = async (userId: string) => {
     try {
       console.log('AuthContext: loadUserData starting for userId:', userId);
       
-      // Load user profile
-      console.log('AuthContext: Querying profiles table...');
+      const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('Query timeout')), 15000);
+      });
       
-      const { data: profileData, error: profileError } = await supabase
+      // ⚠️ TEMPORARY: Use Supabase directly until backend endpoints are ready
+      console.log('AuthContext: Fetching profile from Supabase (temp fallback)...');
+      const profilePromise = supabase
         .from('profiles')
         .select('*')
         .eq('id', userId)
         .single();
-
-      if (!isMounted) return;
-
+      
+      const { data: profileData, error: profileError } = await Promise.race([profilePromise, timeoutPromise]);
+      
       console.log('AuthContext: Profile query completed');
-      console.log('AuthContext: Profile query result:', { 
-        hasData: !!profileData, 
-        error: profileError?.message,
-        errorCode: profileError?.code,
+      console.log('AuthContext: Profile data received:', {
+        hasData: !!profileData,
+        profileId: profileData?.id,
+        role: profileData?.role,
+        organizationId: profileData?.organization_id
       });
 
       if (profileError) {
@@ -192,58 +145,62 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         
         // Check if it's a "no rows" error (profile doesn't exist)
         if (profileError.code === 'PGRST116') {
-          console.warn('AuthContext: Profile not found - attempting to create');
-          await createMissingProfile(userId, isMounted);
+          console.warn('AuthContext: Profile not found - attempting to create...');
+          await createMissingProfile(userId);
           return;
         }
         
         setProfile(null);
-        setLoadingWithTimeout(false);
+        setLoading(false);
         return;
       }
 
       if (!profileData) {
         console.warn('AuthContext: No profile data returned');
         setProfile(null);
-        setLoadingWithTimeout(false);
+        setLoading(false);
         return;
       }
 
       console.log('AuthContext: Setting profile data');
       setProfile(profileData);
 
-      // Load organization if user has one
+      // ⚠️ TEMPORARY: Load organization using Supabase until backend is ready
       if (profileData.organization_id) {
         console.log('AuthContext: Loading organization:', profileData.organization_id);
         
-        const { data: orgData, error: orgError } = await supabase
-          .from('organizations')
-          .select(`
-            *,
-            pricing_plans (
-              id,
-              name,
-              price_monthly,
-              max_vehicles,
-              max_employees
-            )
-          `)
-          .eq('id', profileData.organization_id)
-          .single();
+        try {
+          const { data: orgData, error: orgError } = await supabase
+            .from('organizations')
+            .select(`
+              *,
+              pricing_plans (
+                id,
+                name,
+                price_monthly,
+                max_vehicles,
+                max_employees
+              )
+            `)
+            .eq('id', profileData.organization_id)
+            .single();
+          
+          console.log('AuthContext: Organization query result:', { 
+            hasData: !!orgData,
+            orgId: orgData?.id,
+            orgName: orgData?.name
+          });
 
-        if (!isMounted) return;
-
-        console.log('AuthContext: Organization query result:', { 
-          hasData: !!orgData, 
-          error: orgError?.message 
-        });
-
-        if (orgError) {
+          if (orgError) {
+            console.error('AuthContext: Error loading organization:', orgError);
+            setOrganization(null);
+          } else {
+            console.log('AuthContext: Setting organization data');
+            setOrganization(orgData);
+          }
+        } catch (orgError) {
           console.error('AuthContext: Error loading organization:', orgError);
           setOrganization(null);
-        } else {
-          console.log('AuthContext: Setting organization data');
-          setOrganization(orgData);
         }
       } else {
         console.log('AuthContext: No organization_id in profile');
@@ -253,23 +210,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       console.log('AuthContext: loadUserData completed successfully');
       
     } catch (error) {
-      console.error('AuthContext: Unexpected error in loadUserData:', error);
+      console.error('AuthContext: Error in loadUserData:', error);
       
-      if (isMounted) {
-        setProfile(null);
-        setOrganization(null);
+      if (error.message === 'Query timeout') {
+        console.error('AuthContext: Database query timed out - possible connection issues');
       }
+      
+      setProfile(null);
+      setOrganization(null);
     } finally {
-      // ALWAYS set loading to false if component is still mounted
-      if (isMounted) {
-        console.log('AuthContext: Setting loading to false');
-        setLoadingWithTimeout(false);
-      }
+      console.log('AuthContext: Setting loading to false');
+      setLoading(false);
     }
   };
   
-  // Helper function to create missing profile
-  const createMissingProfile = async (userId: string, isMounted: boolean = true) => {
+  // ⚠️ TEMPORARY: Helper function to create missing profile using Supabase
+  const createMissingProfile = async (userId: string) => {
     try {
       console.log('AuthContext: Attempting to create missing profile...');
       
@@ -285,17 +241,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         last_name: user.user_metadata?.last_name || '',
         role: 'driver' as const,
         is_active: true,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
       };
 
+      // ⚠️ TEMPORARY: Use Supabase directly until backend profile creation endpoint is ready
       const { data, error } = await supabase
         .from('profiles')
         .upsert(profileData, { onConflict: 'id' })
         .select()
         .single();
-
-      if (!isMounted) return;
 
       if (error) {
         console.error('AuthContext: Failed to create profile:', error);
@@ -307,16 +260,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       
     } catch (error) {
       console.error('AuthContext: Error creating missing profile:', error);
-      if (isMounted) {
-        setProfile(null);
-      }
+      setProfile(null);
     } finally {
-      if (isMounted) {
-        setLoadingWithTimeout(false);
-      }
+      setLoading(false);
     }
   };
 
+  // ✅ MIGRATED: Use backend API for signup
   const signUp = async (
     userData: SignUpUserData, 
     organizationData: SignUpOrganizationData
@@ -324,106 +274,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       console.log('AuthContext: Starting signup process...');
       
-      // Step 1: Create organization first
-      console.log('AuthContext: Creating organization...');
-      const orgInsertData = {
-        name: organizationData.name,
-        email: organizationData.email,
-        phone: organizationData.phone,
-        address_line_1: organizationData.addressLine1,
-        address_line_2: organizationData.addressLine2,
-        city: organizationData.city,
-        state_province: organizationData.stateProvince,
-        postal_code: organizationData.postalCode,
-        country: organizationData.country,
-        industry: organizationData.industry,
-        company_size: organizationData.companySize,
-        fleet_size: organizationData.fleetSize,
-        pricing_plan_id: organizationData.pricingPlanId,
-        subscription_status: 'trial' as const, 
-      };
-
-      const { data: orgData, error: orgError } = await supabase
-        .from('organizations')
-        .insert(orgInsertData)
-        .select()
-        .single();
-
-      if (orgError) {
-        console.error('AuthContext: Organization creation error:', orgError);
-        throw new Error(`Failed to create organization: ${orgError.message}`);
-      }
-
-      console.log('AuthContext: Organization created:', orgData.id);
-
-      // Step 2: Create auth user
-      console.log('AuthContext: Creating auth user...');
-      const { data: authData, error: authError } = await supabase.auth.signUp({
-        email: userData.email,
-        password: userData.password,
-        options: {
-          data: {
-            first_name: userData.firstName,
-            last_name: userData.lastName,
-            phone: userData.phone,
-            organization_id: orgData.id,
-            role: userData.role,
-            license_number: userData.licenseNumber,
-            license_expiry: userData.licenseExpiry,
-          }
-        }
-      });
-
-      if (authError) {
-        console.error('AuthContext: Auth user creation error:', authError);
-        // Clean up organization if user creation failed
-        await supabase.from('organizations').delete().eq('id', orgData.id);
-        throw new Error(`Failed to create user account: ${authError.message}`);
-      }
-
-      if (!authData.user) {
-        throw new Error('User creation succeeded but no user data returned');
-      }
-
-      console.log('AuthContext: Auth user created:', authData.user.id);
-
-      // Step 3: Upsert profile (handle trigger-created profiles)
-      console.log('AuthContext: Upserting profile...');
-      const profileData = {
-        id: authData.user.id,
-        email: userData.email,
-        first_name: userData.firstName,
-        last_name: userData.lastName,
-        phone: userData.phone,
-        role: userData.role,
-        license_number: userData.licenseNumber,
-        license_expiry: userData.licenseExpiry,
-        organization_id: orgData.id,
-        is_active: true,
-        updated_at: new Date().toISOString(),
-      };
-
-      const { data: profile, error: profileError } = await supabase
-        .from('profiles')
-        .upsert(profileData, { onConflict: 'id' })
-        .select()
-        .single();
-
-      if (profileError) {
-        console.error('AuthContext: Profile creation error:', profileError);
-        // This is critical - if profile creation fails, cleanup
-        await supabase.from('organizations').delete().eq('id', orgData.id);
-        throw new Error(`Failed to create user profile: ${profileError.message}`);
-      }
-
-      console.log('AuthContext: Profile created successfully');
-      console.log('AuthContext: Signup process completed');
-
-      return {
-        user: authData.user,
-        organization: orgData,
-        profile: profile,
-      };
+      // ✅ Use backend API for complete signup process
+      const result = await api.auth.signUp(userData, organizationData);
+      
+      console.log('AuthContext: Signup process completed via backend');
+      return result;
 
     } catch (error: any) {
       console.error('AuthContext: Signup process failed:', error);
@@ -431,6 +286,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  // ✅ Keep Supabase for auth sign in (since it handles session management)
   const signIn = async (email: string, password: string): Promise<void> => {
     console.log('AuthContext: Signing in user...');
     const { error } = await supabase.auth.signInWithPassword({
@@ -446,114 +302,49 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     console.log('AuthContext: Sign in successful');
   };
 
+  // ✅ Keep Supabase for sign out (session management)
   const signOut = async (): Promise<void> => {
-    try {
-      console.log('AuthContext: Starting sign out process...');
-      
-      // Clear local state immediately
-      console.log('AuthContext: Clearing local state...');
-      setUser(null);
-      setProfile(null);
-      setOrganization(null);
-      setSession(null);
-      setLoadingWithTimeout(false);
-      
-      // Clear local storage
-      console.log('AuthContext: Clearing local storage...');
-      try {
-        localStorage.removeItem('fleet-flow-auth');
-        
-        // Clear any Supabase auth keys
-        for (let i = localStorage.length - 1; i >= 0; i--) {
-          const key = localStorage.key(i);
-          if (key && (key.startsWith('sb-') || key.includes('auth'))) {
-            console.log('AuthContext: Removing auth key:', key);
-            localStorage.removeItem(key);
-          }
-        }
-      } catch (storageError) {
-        console.warn('AuthContext: Error clearing localStorage:', storageError);
-      }
-      
-      // Sign out from Supabase
-      console.log('AuthContext: Calling Supabase signOut...');
-      const { error } = await supabase.auth.signOut();
-      
-      if (error) {
-        console.error('AuthContext: Supabase sign out error:', error);
-        // Don't throw error - we already cleared local state
-        console.warn('AuthContext: Continuing with local sign out despite Supabase error');
-      } else {
-        console.log('AuthContext: Supabase sign out successful');
-      }
-      
-      // Force redirect to login page
-      console.log('AuthContext: Redirecting to login...');
-      setTimeout(() => {
-        window.location.href = '/sign-in'; // Updated to match your route
-      }, 100);
-      
-      console.log('AuthContext: Sign out process completed');
-      
-    } catch (error) {
-      console.error('AuthContext: Unexpected error during sign out:', error);
-      
-      // Even if there's an error, clear local state and redirect
-      setUser(null);
-      setProfile(null);
-      setOrganization(null);
-      setSession(null);
-      setLoadingWithTimeout(false);
-      
-      setTimeout(() => {
-        window.location.href = '/sign-in'; // Updated to match your route
-      }, 100);
+    console.log('AuthContext: Signing out...');
+    const { error } = await supabase.auth.signOut();
+    if (error) {
+      console.error('AuthContext: Sign out error:', error);
+      throw error;
     }
+    console.log('AuthContext: Sign out successful');
   };
 
+  // ✅ MIGRATED: Use backend API for profile updates
   const updateProfile = async (updates: ProfileUpdate): Promise<void> => {
     if (!user) {
       throw new Error('No user logged in');
     }
 
-    const { error } = await supabase
-      .from('profiles')
-      .update(updates)
-      .eq('id', user.id);
-
-    if (error) {
-      throw error;
-    }
-
+    await api.profile.updateProfile(user.id, updates);
+    
     // Refresh profile data
     await loadUserData(user.id);
   };
 
+  // ✅ MIGRATED: Use backend API for organization updates
   const updateOrganization = async (updates: OrganizationUpdate): Promise<void> => {
     if (!profile?.organization_id) {
       throw new Error('No organization associated with user');
     }
 
-    const { error } = await supabase
-      .from('organizations')
-      .update(updates)
-      .eq('id', profile.organization_id);
-
-    if (error) {
-      throw error;
-    }
-
+    await api.organization.updateOrganization(profile.organization_id, updates);
+    
     // Refresh user data
     await loadUserData(user!.id);
   };
 
   const refreshProfile = async (): Promise<void> => {
     if (user) {
-      setLoadingWithTimeout(true);
+      setLoading(true);
       await loadUserData(user.id);
     }
   };
 
+  // ✅ MIGRATED: Use backend API for user invitations
   const inviteUsers = async (emails: string[], role: UserRole = 'driver'): Promise<void> => {
     console.log('🚀 Starting invitation process for emails:', emails);
     console.log('📋 Role:', role);
@@ -568,26 +359,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     try {
-      const response = await fetch(`${API_BASE_URL}/api/invite-users`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${session?.access_token}`,
-        },
-        body: JSON.stringify({
-          emails,
-          role,
-          organization_id: profile.organization_id,
-          invited_by: user.id,
-        }),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
-      }
-
-      const result = await response.json();
+      // ✅ Use backend API for invitations
+      const result = await api.auth.inviteUsers(emails, role, profile.organization_id);
       console.log('✅ Invitations sent successfully:', result);
       
     } catch (error) {
@@ -601,7 +374,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     profile,
     organization,
     session,
-    loading: loading && !initialized, // Don't show loading after first initialization
+    loading,
     signUp,
     signIn,
     signOut,

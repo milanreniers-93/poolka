@@ -1,8 +1,8 @@
-// src/pages/UserProfilePage.tsx - Complete user dashboard
+// src/pages/UserProfilePage.tsx - Migrated to use backend API
 import React, { useState } from 'react';
 import { useAuth } from '@/contexts/auth/AuthContext';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { supabase } from '@/lib/supabase';
+import { api } from '@/lib/api'; // ✅ Import API client instead of supabase
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -45,83 +45,104 @@ const UserProfilePage = () => {
 
   const queryClient = useQueryClient();
 
-  // Fetch user's booking statistics
+  // ✅ MIGRATED: Fetch user statistics using backend API
   const { data: userStats, isLoading: statsLoading } = useQuery({
     queryKey: ['userStats', profile?.id],
     queryFn: async () => {
       if (!profile?.id) return null;
 
-      const { data: bookings, error } = await supabase
-        .from('bookings')
-        .select('status, created_at, start_time, end_time')
-        .eq('user_id', profile.id);
-
-      if (error) throw error;
-
-      const now = new Date();
-      const thisMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-      const thisYear = new Date(now.getFullYear(), 0, 1);
-
-      return {
-        totalBookings: bookings.length,
-        completedBookings: bookings.filter(b => b.status === 'completed').length,
-        pendingBookings: bookings.filter(b => b.status === 'pending').length,
-        activeBookings: bookings.filter(b => b.status === 'in_progress').length,
-        monthlyBookings: bookings.filter(b => new Date(b.created_at) >= thisMonth).length,
-        yearlyBookings: bookings.filter(b => new Date(b.created_at) >= thisYear).length,
-      };
+      console.log('📊 Fetching user stats via backend API for user:', profile.id);
+      
+      // ✅ Use backend API instead of direct Supabase
+      const stats = await api.profile.getUserStats(profile.id);
+      
+      console.log('✅ User stats received:', {
+        totalBookings: stats?.totalBookings,
+        completedBookings: stats?.completedBookings,
+        monthlyBookings: stats?.monthlyBookings
+      });
+      
+      return stats;
     },
     enabled: !!profile?.id
   });
 
-  // Fetch recent bookings
+  // ✅ MIGRATED: Fetch recent bookings using backend API
   const { data: recentBookings, isLoading: bookingsLoading } = useQuery({
     queryKey: ['recentBookings', profile?.id],
     queryFn: async () => {
       if (!profile?.id) return [];
 
-      const { data, error } = await supabase
-        .from('bookings')
-        .select(`
-          *,
-          cars!bookings_car_id_fkey (
-            make,
-            model,
-            license_plate
-          )
-        `)
-        .eq('user_id', profile.id)
-        .order('created_at', { ascending: false })
-        .limit(5);
-
-      if (error) throw error;
-      return data || [];
+      console.log('📋 Fetching recent bookings via backend API for user:', profile.id);
+      
+      // ✅ Use backend API instead of direct Supabase
+      const bookings = await api.profile.getRecentBookings(profile.id, 5);
+      
+      console.log('✅ Recent bookings received:', bookings?.length || 0);
+      
+      return bookings || [];
     },
     enabled: !!profile?.id
   });
 
-  // Update profile mutation
+  // ✅ MIGRATED: Update profile using backend API
   const updateProfileMutation = useMutation({
     mutationFn: async (updates: typeof editForm) => {
-      await updateProfile(updates);
+      if (!profile?.id) {
+        throw new Error('No user profile found');
+      }
+      
+      console.log('✏️ Updating profile via backend API:', updates);
+      
+      // ✅ Use backend API instead of direct Supabase
+      await api.profile.updateProfile(profile.id, updates);
+      
+      console.log('✅ Profile updated successfully');
     },
     onSuccess: () => {
       setIsEditing(false);
+      // Invalidate related queries to refresh data
+      queryClient.invalidateQueries({ queryKey: ['userStats'] });
+      queryClient.invalidateQueries({ queryKey: ['recentBookings'] });
+      
       toast({
         title: "Profile updated",
         description: "Your profile has been updated successfully.",
       });
     },
     onError: (error: any) => {
+      console.error('❌ Error updating profile:', error);
+      
+      let errorMessage = 'Failed to update profile';
+      if (error.message?.includes('validation')) {
+        errorMessage = 'Please check your profile details and try again';
+      } else if (error.message?.includes('unauthorized')) {
+        errorMessage = 'You do not have permission to update this profile';
+      } else if (error.message?.includes('duplicate')) {
+        errorMessage = 'Some information already exists in the system';
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
+      
       toast({
         title: "Error updating profile",
-        description: error.message,
+        description: errorMessage,
         variant: "destructive",
       });
     }
   });
 
   const handleSaveProfile = () => {
+    // Basic validation
+    if (!editForm.first_name.trim() || !editForm.last_name.trim()) {
+      toast({
+        title: "Validation error",
+        description: "First name and last name are required",
+        variant: "destructive",
+      });
+      return;
+    }
+
     updateProfileMutation.mutate(editForm);
   };
 
@@ -223,9 +244,21 @@ const UserProfilePage = () => {
                 </Button>
               ) : (
                 <div className="flex gap-2">
-                  <Button onClick={handleSaveProfile} disabled={updateProfileMutation.isPending}>
-                    <Save className="h-4 w-4 mr-2" />
-                    Save
+                  <Button 
+                    onClick={handleSaveProfile} 
+                    disabled={updateProfileMutation.isPending}
+                  >
+                    {updateProfileMutation.isPending ? (
+                      <>
+                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                        Saving...
+                      </>
+                    ) : (
+                      <>
+                        <Save className="h-4 w-4 mr-2" />
+                        Save
+                      </>
+                    )}
                   </Button>
                   <Button variant="outline" onClick={handleCancelEdit}>
                     <X className="h-4 w-4 mr-2" />
@@ -243,6 +276,7 @@ const UserProfilePage = () => {
                       id="first_name"
                       value={editForm.first_name}
                       onChange={(e) => setEditForm(prev => ({ ...prev, first_name: e.target.value }))}
+                      required
                     />
                   ) : (
                     <p className="py-2 px-3 bg-gray-50 rounded-md">{profile.first_name}</p>
@@ -255,6 +289,7 @@ const UserProfilePage = () => {
                       id="last_name"
                       value={editForm.last_name}
                       onChange={(e) => setEditForm(prev => ({ ...prev, last_name: e.target.value }))}
+                      required
                     />
                   ) : (
                     <p className="py-2 px-3 bg-gray-50 rounded-md">{profile.last_name}</p>
@@ -275,6 +310,7 @@ const UserProfilePage = () => {
                       id="phone"
                       value={editForm.phone}
                       onChange={(e) => setEditForm(prev => ({ ...prev, phone: e.target.value }))}
+                      placeholder="e.g., +32 xxx xxx xxx"
                     />
                   ) : (
                     <p className="py-2 px-3 bg-gray-50 rounded-md flex items-center gap-2">
@@ -290,6 +326,7 @@ const UserProfilePage = () => {
                       id="license_number"
                       value={editForm.license_number}
                       onChange={(e) => setEditForm(prev => ({ ...prev, license_number: e.target.value }))}
+                      placeholder="e.g., ABC123456"
                     />
                   ) : (
                     <p className="py-2 px-3 bg-gray-50 rounded-md flex items-center gap-2">
@@ -321,7 +358,7 @@ const UserProfilePage = () => {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <Label>Role</Label>
-                  <div  className="py-2 px-3 bg-gray-50 rounded-md flex items-center gap-2">
+                  <div className="py-2 px-3 bg-gray-50 rounded-md flex items-center gap-2">
                     <div className="inline-flex items-center whitespace-nowrap">
                       {getRoleBadge(profile.role)}
                     </div>
@@ -428,9 +465,9 @@ const UserProfilePage = () => {
                         <TableCell>
                           <div>
                             <p className="font-medium">
-                              {booking.cars?.make} {booking.cars?.model}
+                              {booking.car?.make} {booking.car?.model}
                             </p>
-                            <p className="text-sm text-gray-500">{booking.cars?.license_plate}</p>
+                            <p className="text-sm text-gray-500">{booking.car?.license_plate}</p>
                           </div>
                         </TableCell>
                         <TableCell>
