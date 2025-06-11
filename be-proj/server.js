@@ -7,7 +7,10 @@ const rateLimit = require('express-rate-limit');
 const morgan = require('morgan');
 
 // Import routes
+<<<<<<< HEAD
 const { router: authRoutes } = require('./routes/auth');
+=======
+>>>>>>> 5ca7e49a23da53190a11dab9b09fa9e058446761
 const bookingRoutes = require('./routes/bookings');
 const carRoutes = require('./routes/cars');
 const profileRoutes = require('./routes/profiles');
@@ -21,7 +24,7 @@ const PORT = process.env.PORT || 5000;
 // Security middleware
 app.use(helmet());
 
-// CORS configuration
+// CORS configurationf
 app.use(cors({
   origin: process.env.FRONTEND_URL || 'http://localhost:8080',
   credentials: true,
@@ -52,7 +55,10 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // API Routes
 app.use('/api/health', healthRoutes);
+<<<<<<< HEAD
 app.use('/api/auth', authRoutes);
+=======
+>>>>>>> 5ca7e49a23da53190a11dab9b09fa9e058446761
 app.use('/api/bookings', bookingRoutes);
 app.use('/api/cars', carRoutes);
 app.use('/api/profiles', profileRoutes);
