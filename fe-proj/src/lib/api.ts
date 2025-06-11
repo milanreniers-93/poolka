@@ -1,316 +1,375 @@
-// src/lib/api.ts - Centralized API client for backend calls
-import { UserRole, ProfileUpdate, OrganizationUpdate, SignUpUserData, SignUpOrganizationData } from '@/contexts/auth/types';
-
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+// lib/api.ts - Enhanced API client with proper error handling and types
+const API_BASE_URL = import.meta.env.VITE_API_URL;
 
 // Types for API responses
-interface ApiResponse<T> {
+export interface ApiResponse<T = any> {
   data?: T;
-  error?: string;
   message?: string;
+  error?: string;
+  pagination?: {
+    page: number;
+    limit: number;
+    total: number;
+  };
 }
 
-interface BookingParams {
-  filter?: 'upcoming' | 'past' | 'all';
-  page?: number;
-  limit?: number;
-  status?: string;
+export interface Booking {
+  id: string;
+  user_id: string;
+  car_id: string;
+  start_time: string;
+  end_time: string;
+  reason?: string;
+  destination?: string;
+  passenger_count?: number;
+  status: 'pending' | 'confirmed' | 'in_progress' | 'completed' | 'cancelled';
+  notes?: string;
+  created_at: string;
+  updated_at?: string;
+  cars?: {
+    id: string;
+    make: string;
+    model: string;
+    license_plate: string;
+    parking_spot?: string;
+  };
+  profiles?: {
+    id: string;
+    first_name: string;
+    last_name: string;
+    email: string;
+  };
 }
 
-interface BookingResponse {
-  bookings: any[];
-  total: number;
-  page: number;
-  totalPages: number;
+export interface Car {
+  id: string;
+  make: string;
+  model: string;
+  year: number;
+  license_plate: string;
+  seats: number;
+  fuel_type: string;
+  transmission: string;
+  status: 'available' | 'booked' | 'maintenance' | 'out_of_service' | 'retired';
+  color?: string;
+  current_mileage?: number;
+  daily_rate?: number;
+  notes?: string;
+  organization_id: string;
+  created_at: string;
 }
 
-interface CarAvailabilityParams {
-  startTime: string;
-  endTime: string;
-  organizationId: string;
-}
-
-class ApiClient {
-  private baseURL: string;
-
-  constructor(baseURL: string) {
-    this.baseURL = baseURL;
+// Enhanced error class
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    public status: number,
+    public code?: string,
+    public details?: any
+  ) {
+    super(message);
+    this.name = 'ApiError';
   }
+}
 
-  private async makeRequest<T>(
-    endpoint: string,
-    options: RequestInit = {}
-  ): Promise<T> {
-    const url = `${this.baseURL}/api${endpoint}`;
-    
-    // Get auth token from Supabase session
-    let token: string | null = null;
-    try {
-      // Try to get token from Supabase
-      const { supabase } = await import('@/lib/supabase');
-      const { data: { session } } = await supabase.auth.getSession();
-      token = session?.access_token || null;
-    } catch (error) {
-      console.warn('Could not retrieve auth token:', error);
+// Get auth token from localStorage with better error handling
+const getAuthToken = (): string | null => {
+  try {
+    // Get session from Supabase auth storage
+    const authData = localStorage.getItem('sb-' + import.meta.env.VITE_SUPABASE_URL?.split('//')[1]?.split('.')[0] + '-auth-token');
+    if (authData) {
+      const parsed = JSON.parse(authData);
+      return parsed.access_token;
     }
 
-    const config: RequestInit = {
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token && { Authorization: `Bearer ${token}` }),
-        ...options.headers,
-      },
-      ...options,
-    };
+    // Fallback: check your custom key
+    const customAuth = localStorage.getItem('fleet-flow-auth');
+    if (customAuth) {
+      const parsed = JSON.parse(customAuth);
+      return parsed.access_token || parsed.session?.access_token;
+    }
 
+    return null;
+  } catch (error) {
+    console.error('Error getting auth token:', error);
+    return null;
+  }
+};
+
+// Generic API request function with proper error handling
+export const apiRequest = async <T = any>(
+  endpoint: string, 
+  options: RequestInit = {}
+): Promise<T> => {
+  const token = getAuthToken();
+  
+  const config: RequestInit = {
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token && { Authorization: `Bearer ${token}` }),
+      ...options.headers,
+    },
+    ...options,
+  };
+
+  try {
+    const response = await fetch(`${API_BASE_URL}${endpoint}`, config);
+    
+    let responseData;
     try {
-      console.log(`🌐 API Request: ${options.method || 'GET'} ${url}`);
-      const response = await fetch(url, config);
-      
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
-      }
+      responseData = await response.json();
+    } catch {
+      responseData = { message: 'Invalid response format' };
+    }
 
-      return await response.json();
-    } catch (error) {
-      console.error(`API Error [${endpoint}]:`, error);
+    if (!response.ok) {
+      throw new ApiError(
+        responseData.error || responseData.message || `HTTP ${response.status}`,
+        response.status,
+        responseData.code,
+        responseData.details
+      );
+    }
+
+    return responseData;
+  } catch (error) {
+    if (error instanceof ApiError) {
       throw error;
     }
+    
+    // Network or other errors
+    throw new ApiError(
+      error instanceof Error ? error.message : 'Network error',
+      0
+    );
   }
+};
 
-  // Authentication endpoints
-  auth = {
-    signUp: async (userData: SignUpUserData, organizationData: SignUpOrganizationData) => {
-      return this.makeRequest<{ user: any; organization: any; profile: any }>('/auth/signup', {
-        method: 'POST',
-        body: JSON.stringify({ userData, organizationData }),
-      });
-    },
+// Booking API functions
+export const bookingAPI = {
+  // Get all bookings with filters
+  getBookings: async (params: {
+    filter?: 'upcoming' | 'past' | 'all';
+    page?: number;
+    limit?: number;
+    car_id?: string;
+    status?: string;
+    start_date?: string;
+    end_date?: string;
+    user_id?: string;
+  } = {}): Promise<{ bookings: Booking[]; pagination?: any }> => {
+    const queryParams = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => {
+      if (value !== undefined) {
+        queryParams.append(key, value.toString());
+      }
+    });
+    
+    return apiRequest(`/bookings?${queryParams}`);
+  },
 
-    signIn: async (email: string, password: string) => {
-      return this.makeRequest<{ user: any; session: any }>('/auth/signin', {
-        method: 'POST',
-        body: JSON.stringify({ email, password }),
-      });
-    },
+  // Get booking by ID
+  getBooking: async (id: string): Promise<Booking> => {
+    return apiRequest(`/bookings/${id}`);
+  },
 
-    signOut: async () => {
-      return this.makeRequest<void>('/auth/signout', {
-        method: 'POST',
-      });
-    },
+  // Create new booking
+  createBooking: async (bookingData: {
+    car_id: string;
+    start_time: string;
+    end_time: string;
+    reason?: string;
+    destination?: string;
+    passenger_count?: number;
+    notes?: string;
+  }): Promise<{ message: string; booking: Booking }> => {
+    return apiRequest('/bookings', {
+      method: 'POST',
+      body: JSON.stringify(bookingData),
+    });
+  },
 
-    refreshSession: async () => {
-      return this.makeRequest<{ user: any; session: any }>('/auth/refresh', {
-        method: 'POST',
-      });
-    },
+  // Update booking
+  updateBooking: async (id: string, updates: Partial<Booking>): Promise<{ message: string; booking: Booking }> => {
+    return apiRequest(`/bookings/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(updates),
+    });
+  },
 
-    inviteUsers: async (emails: string[], role: UserRole, organizationId: string) => {
-      return this.makeRequest<{ invitations: any[] }>('/auth/invite', {
-        method: 'POST',
-        body: JSON.stringify({ emails, role, organizationId }),
-      });
-    },
-  };
+  // Cancel booking
+  cancelBooking: async (id: string): Promise<{ message: string }> => {
+    return apiRequest(`/bookings/${id}`, {
+      method: 'DELETE',
+    });
+  },
 
-  // Profile endpoints
-  profile = {
-    getProfile: async (userId: string) => {
-      return this.makeRequest<any>(`/profile/${userId}`);
-    },
+  // Get calendar data
+  getCalendarData: async (start: string, end: string): Promise<{ bookings: Booking[] }> => {
+    return apiRequest(`/bookings/calendar/data?start=${start}&end=${end}`);
+  },
+};
 
-    updateProfile: async (userId: string, updates: ProfileUpdate) => {
-      return this.makeRequest<any>(`/profile/${userId}`, {
-        method: 'PUT',
-        body: JSON.stringify(updates),
-      });
-    },
+// Car API functions
+export const carAPI = {
+  getCars: async (params: {
+    page?: number;
+    limit?: number;
+    status?: string;
+    available_only?: boolean;
+  } = {}): Promise<{ cars: Car[]; pagination?: any }> => {
+    const queryParams = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => {
+      if (value !== undefined) {
+        queryParams.append(key, value.toString());
+      }
+    });
+    
+    return apiRequest(`/cars?${queryParams}`);
+  },
 
-    getUserStats: async (userId: string) => {
-      return this.makeRequest<any>(`/profile/${userId}/stats`);
-    },
+  getCar: async (id: string): Promise<Car> => {
+    return apiRequest(`/cars/${id}`);
+  },
 
-    getRecentBookings: async (userId: string, limit = 5) => {
-      return this.makeRequest<any[]>(`/profile/${userId}/bookings?limit=${limit}`);
-    },
-  };
+  createCar: async (carData: Omit<Car, 'id' | 'organization_id' | 'created_at'>): Promise<{ message: string; car: Car }> => {
+    return apiRequest('/cars', {
+      method: 'POST',
+      body: JSON.stringify(carData),
+    });
+  },
 
-  // Organization endpoints
-  organization = {
-    getOrganization: async (organizationId: string) => {
-      return this.makeRequest<any>(`/organization/${organizationId}`);
-    },
+  updateCar: async (id: string, updates: Partial<Car>): Promise<{ message: string; car: Car }> => {
+    return apiRequest(`/cars/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(updates),
+    });
+  },
 
-    updateOrganization: async (organizationId: string, updates: OrganizationUpdate) => {
-      return this.makeRequest<any>(`/organization/${organizationId}`, {
-        method: 'PUT',
-        body: JSON.stringify(updates),
-      });
-    },
+  deleteCar: async (id: string): Promise<{ message: string }> => {
+    return apiRequest(`/cars/${id}`, {
+      method: 'DELETE',
+    });
+  },
 
-    getUsers: async (organizationId: string) => {
-      return this.makeRequest<any[]>(`/organization/${organizationId}/users`);
-    },
+  checkAvailability: async (carId: string, startTime: string, endTime: string): Promise<{
+    available: boolean;
+    reason?: string;
+    conflicts?: any[];
+  }> => {
+    return apiRequest(`/cars/availability/${carId}?start_time=${startTime}&end_time=${endTime}`);
+  },
 
-    getUserStats: async (organizationId: string) => {
-      return this.makeRequest<any>(`/organization/${organizationId}/stats`);
-    },
+  getFleetStats: async (): Promise<{
+    totalCars: number;
+    availableCars: number;
+    bookedCars: number;
+    maintenanceCars: number;
+    monthlyBookings: number;
+    completedBookings: number;
+    pendingBookings: number;
+    activeBookings: number;
+  }> => {
+    return apiRequest('/cars/stats/overview');
+  },
+};
 
-    updateUserRole: async (organizationId: string, userId: string, role: UserRole) => {
-      return this.makeRequest<any>(`/organization/${organizationId}/users/${userId}/role`, {
-        method: 'PUT',
-        body: JSON.stringify({ role }),
-      });
-    },
+// Organization API functions
+export const organizationAPI = {
+  getMyOrganization: async (): Promise<any> => {
+    return apiRequest('/organizations/me');
+  },
 
-    deactivateUser: async (organizationId: string, userId: string) => {
-      return this.makeRequest<any>(`/organization/${organizationId}/users/${userId}/deactivate`, {
-        method: 'PUT',
-      });
-    },
-  };
+  updateMyOrganization: async (updates: any): Promise<{ message: string; organization: any }> => {
+    return apiRequest('/organizations/me', {
+      method: 'PUT',
+      body: JSON.stringify(updates),
+    });
+  },
 
-  // Booking endpoints
-  bookings = {
-    getBookings: async (params: BookingParams = {}) => {
-      const queryParams = new URLSearchParams();
-      Object.entries(params).forEach(([key, value]) => {
-        if (value !== undefined) queryParams.append(key, value.toString());
-      });
-      
-      return this.makeRequest<BookingResponse>(`/bookings?${queryParams}`);
-    },
+  getStats: async (): Promise<any> => {
+    return apiRequest('/organizations/stats');
+  },
 
-    getBooking: async (bookingId: string) => {
-      return this.makeRequest<any>(`/bookings/${bookingId}`);
-    },
+  getPlan: async (): Promise<any> => {
+    return apiRequest('/organizations/plan');
+  },
+};
 
-    createBooking: async (bookingData: any) => {
-      return this.makeRequest<any>('/bookings', {
-        method: 'POST',
-        body: JSON.stringify(bookingData),
-      });
-    },
+// Profile API functions
+export const profileAPI = {
+  getMyProfile: async (): Promise<any> => {
+    return apiRequest('/profiles/me');
+  },
 
-    updateBooking: async (bookingId: string, updates: any) => {
-      return this.makeRequest<any>(`/bookings/${bookingId}`, {
-        method: 'PUT',
-        body: JSON.stringify(updates),
-      });
-    },
+  updateMyProfile: async (updates: any): Promise<{ message: string; profile: any }> => {
+    return apiRequest('/profiles/me', {
+      method: 'PUT',
+      body: JSON.stringify(updates),
+    });
+  },
 
-    cancelBooking: async (bookingId: string) => {
-      return this.makeRequest<any>(`/bookings/${bookingId}/cancel`, {
-        method: 'PUT',
-      });
-    },
+  getProfiles: async (params: {
+    page?: number;
+    limit?: number;
+    role?: string;
+    active_only?: boolean;
+  } = {}): Promise<{ profiles: any[]; pagination?: any }> => {
+    const queryParams = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => {
+      if (value !== undefined) {
+        queryParams.append(key, value.toString());
+      }
+    });
+    
+    return apiRequest(`/profiles?${queryParams}`);
+  },
 
-    approveBooking: async (bookingId: string, notes?: string) => {
-      return this.makeRequest<any>(`/bookings/${bookingId}/approve`, {
-        method: 'PUT',
-        body: JSON.stringify({ notes }),
-      });
-    },
+  getUserStats: async (userId?: string): Promise<any> => {
+    const endpoint = userId ? `/profiles/${userId}/stats` : '/profiles/me/stats';
+    return apiRequest(endpoint);
+  },
+};
 
-    getPendingBookings: async (organizationId: string) => {
-      return this.makeRequest<any[]>(`/bookings/pending?organizationId=${organizationId}`);
-    },
+// Auth API functions
+export const authAPI = {
+  signUp: async (userData: any): Promise<any> => {
+    return apiRequest('/auth/signup', {
+      method: 'POST',
+      body: JSON.stringify(userData),
+    });
+  },
 
-    getBookingStats: async (organizationId: string) => {
-      return this.makeRequest<any>(`/bookings/stats?organizationId=${organizationId}`);
-    },
+  signIn: async (email: string, password: string): Promise<any> => {
+    return apiRequest('/auth/signin', {
+      method: 'POST',
+      body: JSON.stringify({ email, password }),
+    });
+  },
 
-    getCalendarBookings: async (organizationId: string, startDate: string, endDate: string) => {
-      return this.makeRequest<any[]>(
-        `/bookings/calendar?organizationId=${organizationId}&startDate=${startDate}&endDate=${endDate}`
-      );
-    },
-  };
+  signOut: async (): Promise<any> => {
+    return apiRequest('/auth/signout', {
+      method: 'POST',
+    });
+  },
 
-  // Fleet/Cars endpoints
-  fleet = {
-    getCars: async (organizationId: string) => {
-      return this.makeRequest<any[]>(`/fleet/cars?organizationId=${organizationId}`);
-    },
+  getMe: async (): Promise<any> => {
+    return apiRequest('/auth/me');
+  },
 
-    getCar: async (carId: string) => {
-      return this.makeRequest<any>(`/fleet/cars/${carId}`);
-    },
+  refreshSession: async (): Promise<any> => {
+    return apiRequest('/auth/session');
+  },
+};
 
-    createCar: async (carData: any) => {
-      return this.makeRequest<any>('/fleet/cars', {
-        method: 'POST',
-        body: JSON.stringify(carData),
-      });
-    },
+// Export the main api object
+export const api = {
+  bookings: bookingAPI,
+  cars: carAPI,
+  organizations: organizationAPI,
+  profiles: profileAPI,
+  auth: authAPI,
+};
 
-    updateCar: async (carId: string, updates: any) => {
-      return this.makeRequest<any>(`/fleet/cars/${carId}`, {
-        method: 'PUT',
-        body: JSON.stringify(updates),
-      });
-    },
-
-    deleteCar: async (carId: string) => {
-      return this.makeRequest<void>(`/fleet/cars/${carId}`, {
-        method: 'DELETE',
-      });
-    },
-
-    getAvailableCars: async (params: CarAvailabilityParams) => {
-      const queryParams = new URLSearchParams(params);
-      return this.makeRequest<any[]>(`/fleet/cars/available?${queryParams}`);
-    },
-
-    getFleetStats: async (organizationId: string) => {
-      return this.makeRequest<any>(`/fleet/stats?organizationId=${organizationId}`);
-    },
-  };
-
-  // Analytics endpoints
-  analytics = {
-    getDashboardStats: async (organizationId: string) => {
-      return this.makeRequest<any>(`/analytics/dashboard?organizationId=${organizationId}`);
-    },
-
-    getBookingAnalytics: async (organizationId: string, period: 'month' | 'year' = 'month') => {
-      return this.makeRequest<any>(`/analytics/bookings?organizationId=${organizationId}&period=${period}`);
-    },
-
-    getFleetUtilization: async (organizationId: string, period: 'month' | 'year' = 'month') => {
-      return this.makeRequest<any>(`/analytics/fleet-utilization?organizationId=${organizationId}&period=${period}`);
-    },
-
-    getUserActivity: async (organizationId: string) => {
-      return this.makeRequest<any[]>(`/analytics/user-activity?organizationId=${organizationId}`);
-    },
-  };
-
-  // Notification endpoints
-  notifications = {
-    getNotifications: async (userId: string) => {
-      return this.makeRequest<any[]>(`/notifications?userId=${userId}`);
-    },
-
-    markAsRead: async (notificationId: string) => {
-      return this.makeRequest<void>(`/notifications/${notificationId}/read`, {
-        method: 'PUT',
-      });
-    },
-
-    markAllAsRead: async (userId: string) => {
-      return this.makeRequest<void>(`/notifications/mark-all-read`, {
-        method: 'PUT',
-        body: JSON.stringify({ userId }),
-      });
-    },
-  };
-}
-
-// Create and export the API instance
-export const api = new ApiClient(API_BASE_URL);
-
-// Export types for use in components
-export type { ApiResponse, BookingParams, BookingResponse, CarAvailabilityParams };
+// Export utility functions (ApiError is already exported above)
+export { getAuthToken };
