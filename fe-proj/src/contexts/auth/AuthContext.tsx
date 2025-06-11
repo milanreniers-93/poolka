@@ -1,5 +1,5 @@
-// src/contexts/auth/AuthContext.tsx - Fixed with upsert for profile creation
-import React, { createContext, useContext, useEffect, useState } from 'react';
+// src/contexts/auth/AuthContext.tsx - Fixed version with reliable loading states
+import React, { createContext, useContext, useEffect, useState, useRef } from 'react';
 import { User, Session } from '@supabase/supabase-js';
 import { supabase } from '@/lib/supabase';
 import type {
@@ -14,7 +14,7 @@ import type {
   OrganizationUpdate,
 } from './types';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL
+const API_BASE_URL = import.meta.env.VITE_API_URL;
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const useAuth = () => {
@@ -31,17 +31,60 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [organization, setOrganization] = useState<Organization | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
+  const [initialized, setInitialized] = useState(false);
+  
+  // Use refs to track loading state and prevent race conditions
+  const isLoadingRef = useRef(false);
+  const loadingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Safe loading state setter with timeout protection
+  const setLoadingWithTimeout = (isLoading: boolean, timeoutMs: number = 10000) => {
+    // Clear any existing timeout
+    if (loadingTimeoutRef.current) {
+      clearTimeout(loadingTimeoutRef.current);
+      loadingTimeoutRef.current = null;
+    }
+
+    setLoading(isLoading);
+    isLoadingRef.current = isLoading;
+
+    // If setting loading to true, add timeout protection
+    if (isLoading) {
+      loadingTimeoutRef.current = setTimeout(() => {
+        console.warn('AuthContext: Loading timeout - forcing loading to false');
+        if (isLoadingRef.current) {
+          setLoading(false);
+          isLoadingRef.current = false;
+        }
+      }, timeoutMs);
+    }
+  };
+
+  // Cleanup timeouts
+  useEffect(() => {
+    return () => {
+      if (loadingTimeoutRef.current) {
+        clearTimeout(loadingTimeoutRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
+    let isMounted = true;
+
     // Get initial session
     const getInitialSession = async () => {
       try {
         console.log('AuthContext: Getting initial session...');
+        
         const { data: { session }, error } = await supabase.auth.getSession();
+        
+        if (!isMounted) return;
         
         if (error) {
           console.error('AuthContext: Error getting session:', error);
-          setLoading(false);
+          setLoadingWithTimeout(false);
+          setInitialized(true);
           return;
         }
         
@@ -51,13 +94,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         
         if (session?.user) {
           console.log('AuthContext: Loading user data for initial session...');
-          await loadUserData(session.user.id);
+          await loadUserData(session.user.id, isMounted);
         } else {
-          setLoading(false);
+          setLoadingWithTimeout(false);
         }
+        
+        if (isMounted) {
+          setInitialized(true);
+        }
+        
       } catch (error) {
         console.error('AuthContext: Error in getInitialSession:', error);
-        setLoading(false);
+        if (isMounted) {
+          setLoadingWithTimeout(false);
+          setInitialized(true);
+        }
       }
     };
 
@@ -66,6 +117,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     // Listen for auth changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
+        if (!isMounted) return;
+        
         console.log('AuthContext: Auth state changed:', event, session?.user?.email);
         
         setSession(session);
@@ -73,23 +126,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         
         if (session?.user) {
           console.log('AuthContext: User authenticated, loading data...');
-          
-          // Set loading true when starting to load user data
-          setLoading(true);
-          
-          // Add timeout protection
-          const timeoutId = setTimeout(() => {
-            console.warn('AuthContext: loadUserData timeout - forcing loading to false');
-            setLoading(false);
-          }, 10000); // 10 second timeout
+          setLoadingWithTimeout(true);
           
           try {
-            await loadUserData(session.user.id);
-            clearTimeout(timeoutId);
+            await loadUserData(session.user.id, isMounted);
           } catch (error) {
-            console.error('AuthContext: Error in auth state change loadUserData:', error);
-            clearTimeout(timeoutId);
-            setLoading(false);
+            console.error('AuthContext: Error in auth state change:', error);
+            if (isMounted) {
+              setLoadingWithTimeout(false);
+            }
           }
           
           // Handle redirects after successful auth
@@ -98,12 +143,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           console.log('AuthContext: User signed out, clearing data...');
           setProfile(null);
           setOrganization(null);
-          setLoading(false);
+          setLoadingWithTimeout(false);
         }
       }
     );
 
     return () => {
+      isMounted = false;
       subscription.unsubscribe();
     };
   }, []);
@@ -119,87 +165,58 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const loadUserData = async (userId: string) => {
+  const loadUserData = async (userId: string, isMounted: boolean = true) => {
     try {
       console.log('AuthContext: loadUserData starting for userId:', userId);
       
-      // Add timeout promise for debugging
-      const timeoutPromise = new Promise((_, reject) => {
-        setTimeout(() => reject(new Error('Query timeout')), 15000); // 15 seconds
-      });
-      
-      // Load user profile with detailed logging and timeout
+      // Load user profile
       console.log('AuthContext: Querying profiles table...');
-      console.log('AuthContext: Using Supabase URL:', supabase.supabaseUrl);
       
-      const profilePromise = supabase
+      const { data: profileData, error: profileError } = await supabase
         .from('profiles')
         .select('*')
         .eq('id', userId)
         .single();
-  
-      // Race between the query and timeout
-      const { data: profileData, error: profileError } = await Promise.race([
-        profilePromise,
-        timeoutPromise
-      ]);
-  
+
+      if (!isMounted) return;
+
       console.log('AuthContext: Profile query completed');
       console.log('AuthContext: Profile query result:', { 
         hasData: !!profileData, 
         error: profileError?.message,
         errorCode: profileError?.code,
-        errorDetails: profileError?.details,
-        errorHint: profileError?.hint,
-        profileData: profileData ? { 
-          id: profileData.id, 
-          email: profileData.email, 
-          role: profileData.role,
-          organization_id: profileData.organization_id 
-        } : null
       });
-  
+
       if (profileError) {
-        console.error('AuthContext: Error loading profile:', {
-          message: profileError.message,
-          code: profileError.code,
-          details: profileError.details,
-          hint: profileError.hint
-        });
+        console.error('AuthContext: Error loading profile:', profileError);
         
         // Check if it's a "no rows" error (profile doesn't exist)
         if (profileError.code === 'PGRST116') {
-          console.warn('AuthContext: Profile not found - user may need to complete signup');
-          // Try to create a basic profile
-          await createMissingProfile(userId);
+          console.warn('AuthContext: Profile not found - attempting to create');
+          await createMissingProfile(userId, isMounted);
           return;
         }
         
-        // Check if it's an RLS policy error
-        if (profileError.message?.includes('policy')) {
-          console.error('AuthContext: RLS policy blocking profile access');
-        }
-        
         setProfile(null);
-        setLoading(false);
+        setLoadingWithTimeout(false);
         return;
       }
-  
+
       if (!profileData) {
         console.warn('AuthContext: No profile data returned');
         setProfile(null);
-        setLoading(false);
+        setLoadingWithTimeout(false);
         return;
       }
-  
+
       console.log('AuthContext: Setting profile data');
       setProfile(profileData);
-  
+
       // Load organization if user has one
       if (profileData.organization_id) {
         console.log('AuthContext: Loading organization:', profileData.organization_id);
         
-        const orgPromise = supabase
+        const { data: orgData, error: orgError } = await supabase
           .from('organizations')
           .select(`
             *,
@@ -213,17 +230,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           `)
           .eq('id', profileData.organization_id)
           .single();
-  
-        const { data: orgData, error: orgError } = await Promise.race([
-          orgPromise,
-          new Promise((_, reject) => setTimeout(() => reject(new Error('Org query timeout')), 10000))
-        ]);
-  
+
+        if (!isMounted) return;
+
         console.log('AuthContext: Organization query result:', { 
           hasData: !!orgData, 
           error: orgError?.message 
         });
-  
+
         if (orgError) {
           console.error('AuthContext: Error loading organization:', orgError);
           setOrganization(null);
@@ -235,27 +249,27 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         console.log('AuthContext: No organization_id in profile');
         setOrganization(null);
       }
-  
+
       console.log('AuthContext: loadUserData completed successfully');
       
     } catch (error) {
       console.error('AuthContext: Unexpected error in loadUserData:', error);
       
-      if (error.message === 'Query timeout') {
-        console.error('AuthContext: Database query timed out - possible connection issues');
+      if (isMounted) {
+        setProfile(null);
+        setOrganization(null);
       }
-      
-      setProfile(null);
-      setOrganization(null);
     } finally {
-      // ALWAYS set loading to false
-      console.log('AuthContext: Setting loading to false');
-      setLoading(false);
+      // ALWAYS set loading to false if component is still mounted
+      if (isMounted) {
+        console.log('AuthContext: Setting loading to false');
+        setLoadingWithTimeout(false);
+      }
     }
   };
   
   // Helper function to create missing profile
-  const createMissingProfile = async (userId: string) => {
+  const createMissingProfile = async (userId: string, isMounted: boolean = true) => {
     try {
       console.log('AuthContext: Attempting to create missing profile...');
       
@@ -263,37 +277,43 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (!user) {
         throw new Error('No authenticated user found');
       }
-  
+
       const profileData = {
         id: userId,
         email: user.email,
         first_name: user.user_metadata?.first_name || '',
         last_name: user.user_metadata?.last_name || '',
-        role: 'driver' as const, // Default role
+        role: 'driver' as const,
         is_active: true,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       };
-  
+
       const { data, error } = await supabase
         .from('profiles')
         .upsert(profileData, { onConflict: 'id' })
         .select()
         .single();
-  
+
+      if (!isMounted) return;
+
       if (error) {
         console.error('AuthContext: Failed to create profile:', error);
         throw error;
       }
-  
+
       console.log('AuthContext: Created missing profile:', data);
       setProfile(data);
       
     } catch (error) {
       console.error('AuthContext: Error creating missing profile:', error);
-      setProfile(null);
+      if (isMounted) {
+        setProfile(null);
+      }
     } finally {
-      setLoading(false);
+      if (isMounted) {
+        setLoadingWithTimeout(false);
+      }
     }
   };
 
@@ -385,7 +405,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       const { data: profile, error: profileError } = await supabase
         .from('profiles')
-        .upsert(profileData, { onConflict: 'id' }) // Handle trigger-created profiles
+        .upsert(profileData, { onConflict: 'id' })
         .select()
         .single();
 
@@ -427,13 +447,68 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const signOut = async (): Promise<void> => {
-    console.log('AuthContext: Signing out...');
-    const { error } = await supabase.auth.signOut();
-    if (error) {
-      console.error('AuthContext: Sign out error:', error);
-      throw error;
+    try {
+      console.log('AuthContext: Starting sign out process...');
+      
+      // Clear local state immediately
+      console.log('AuthContext: Clearing local state...');
+      setUser(null);
+      setProfile(null);
+      setOrganization(null);
+      setSession(null);
+      setLoadingWithTimeout(false);
+      
+      // Clear local storage
+      console.log('AuthContext: Clearing local storage...');
+      try {
+        localStorage.removeItem('fleet-flow-auth');
+        
+        // Clear any Supabase auth keys
+        for (let i = localStorage.length - 1; i >= 0; i--) {
+          const key = localStorage.key(i);
+          if (key && (key.startsWith('sb-') || key.includes('auth'))) {
+            console.log('AuthContext: Removing auth key:', key);
+            localStorage.removeItem(key);
+          }
+        }
+      } catch (storageError) {
+        console.warn('AuthContext: Error clearing localStorage:', storageError);
+      }
+      
+      // Sign out from Supabase
+      console.log('AuthContext: Calling Supabase signOut...');
+      const { error } = await supabase.auth.signOut();
+      
+      if (error) {
+        console.error('AuthContext: Supabase sign out error:', error);
+        // Don't throw error - we already cleared local state
+        console.warn('AuthContext: Continuing with local sign out despite Supabase error');
+      } else {
+        console.log('AuthContext: Supabase sign out successful');
+      }
+      
+      // Force redirect to login page
+      console.log('AuthContext: Redirecting to login...');
+      setTimeout(() => {
+        window.location.href = '/sign-in'; // Updated to match your route
+      }, 100);
+      
+      console.log('AuthContext: Sign out process completed');
+      
+    } catch (error) {
+      console.error('AuthContext: Unexpected error during sign out:', error);
+      
+      // Even if there's an error, clear local state and redirect
+      setUser(null);
+      setProfile(null);
+      setOrganization(null);
+      setSession(null);
+      setLoadingWithTimeout(false);
+      
+      setTimeout(() => {
+        window.location.href = '/sign-in'; // Updated to match your route
+      }, 100);
     }
-    console.log('AuthContext: Sign out successful');
   };
 
   const updateProfile = async (updates: ProfileUpdate): Promise<void> => {
@@ -474,12 +549,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const refreshProfile = async (): Promise<void> => {
     if (user) {
-      setLoading(true);
+      setLoadingWithTimeout(true);
       await loadUserData(user.id);
     }
   };
 
-  // Updated inviteUsers function in AuthContext.tsx
   const inviteUsers = async (emails: string[], role: UserRole = 'driver'): Promise<void> => {
     console.log('🚀 Starting invitation process for emails:', emails);
     console.log('📋 Role:', role);
@@ -494,12 +568,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     try {
-      // Call your backend API endpoint instead of admin function
       const response = await fetch(`${API_BASE_URL}/api/invite-users`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          // Include auth token if needed
           'Authorization': `Bearer ${session?.access_token}`,
         },
         body: JSON.stringify({
@@ -529,7 +601,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     profile,
     organization,
     session,
-    loading,
+    loading: loading && !initialized, // Don't show loading after first initialization
     signUp,
     signIn,
     signOut,

@@ -1,8 +1,8 @@
-// src/components/booking/BookingList.tsx - Migrated to use backend API
+// src/components/booking/BookingList.tsx - Fixed version with proper API integration
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/auth/AuthContext';
-import { api } from '@/lib/api'; // ✅ Using new API client instead of supabase
+import { api } from '@/lib/api';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -43,6 +43,16 @@ interface BookingListProps {
   filter?: 'upcoming' | 'past' | 'all';
 }
 
+interface BookingResponse {
+  bookings: Booking[];
+  pagination?: {
+    page: number;
+    limit: number;
+    total: number;
+    hasMore: boolean;
+  };
+}
+
 const BookingList: React.FC<BookingListProps> = ({ filter = 'all' }) => {
   const navigate = useNavigate();
   const { user, profile } = useAuth();
@@ -61,46 +71,87 @@ const BookingList: React.FC<BookingListProps> = ({ filter = 'all' }) => {
       if (reset) {
         setLoading(true);
         setPage(1);
+        setError(null);
       }
 
-      const params: any = {
+      const params: Record<string, any> = {
         filter,
         page: reset ? 1 : page,
         limit: 20,
       };
 
-      // Add filters
+      // Add status filter if not 'all'
       if (statusFilter !== 'all') {
         params.status = statusFilter;
       }
 
-      // ✅ Using backend API instead of direct Supabase call
-      const response = await api.bookings.getBookings(params);
+      // Debug logging
+      console.log('🔍 Loading bookings with params:', params);
+      console.log('🔍 Current user:', user?.id);
+      console.log('🔍 Current profile role:', profile?.role);
       
+      // Make API call
+      const response: BookingResponse = await api.bookings.getBookings(params);
+      
+      console.log('✅ API response:', {
+        bookingsCount: response.bookings?.length || 0,
+        pagination: response.pagination
+      });
+      
+      // Update bookings state
       if (reset) {
-        setBookings(response.bookings);
+        setBookings(response.bookings || []);
       } else {
-        setBookings(prev => [...prev, ...response.bookings]);
+        setBookings(prev => [...prev, ...(response.bookings || [])]);
       }
 
-      setHasMore(response.bookings.length === 20);
+      // Update pagination
+      if (response.pagination) {
+        setHasMore(response.pagination.hasMore);
+      } else {
+        // Fallback if pagination info not available
+        setHasMore((response.bookings || []).length === 20);
+      }
+
       setError(null);
       
     } catch (error: any) {
-      console.error('Error loading bookings:', error);
-      setError(error.message);
+      console.error('❌ Error loading bookings:', {
+        message: error.message,
+        status: error.status,
+        response: error.response
+      });
+      
+      setError(error.message || 'Failed to load bookings');
+      
+      // Don't clear bookings on error unless it's the first load
+      if (reset) {
+        setBookings([]);
+      }
     } finally {
       setLoading(false);
     }
   };
 
+  // Load bookings when component mounts or filters change
   useEffect(() => {
-    loadBookings(true);
-  }, [filter, statusFilter, user]);
+    if (user) {
+      // Check if we have a profile before loading bookings
+      if (!profile && !loading) {
+        setError('User profile not found. Please ensure your profile is properly set up.');
+        setLoading(false);
+        return;
+      }
+      
+      if (profile) {
+        loadBookings(true);
+      }
+    }
+  }, [filter, statusFilter, user, profile]);
 
+  // Handle booking approval
   const handleApproveBooking = async (bookingId: string) => {
     try {
-      // ✅ Using backend API instead of direct Supabase call
       await api.bookings.updateBooking(bookingId, { status: 'confirmed' });
       
       // Update local state
@@ -110,17 +161,19 @@ const BookingList: React.FC<BookingListProps> = ({ filter = 'all' }) => {
           : booking
       ));
       
+      console.log('✅ Booking approved:', bookingId);
+      
     } catch (error: any) {
-      console.error('Error approving booking:', error);
-      setError(error.message);
+      console.error('❌ Error approving booking:', error);
+      setError(error.message || 'Failed to approve booking');
     }
   };
 
+  // Handle booking cancellation
   const handleCancelBooking = async (bookingId: string) => {
     if (!confirm('Are you sure you want to cancel this booking?')) return;
     
     try {
-      // ✅ Using backend API instead of direct Supabase call
       await api.bookings.cancelBooking(bookingId);
       
       // Update local state
@@ -130,12 +183,21 @@ const BookingList: React.FC<BookingListProps> = ({ filter = 'all' }) => {
           : booking
       ));
       
+      console.log('✅ Booking cancelled:', bookingId);
+      
     } catch (error: any) {
-      console.error('Error cancelling booking:', error);
-      setError(error.message);
+      console.error('❌ Error cancelling booking:', error);
+      setError(error.message || 'Failed to cancel booking');
     }
   };
 
+  // Load more bookings (pagination)
+  const handleLoadMore = () => {
+    setPage(prev => prev + 1);
+    loadBookings(false);
+  };
+
+  // Get status badge configuration
   const getStatusBadge = (status: string) => {
     const statusConfig = {
       pending: { variant: 'secondary' as const, label: 'Pending' },
@@ -149,6 +211,7 @@ const BookingList: React.FC<BookingListProps> = ({ filter = 'all' }) => {
     return <Badge variant={config.variant}>{config.label}</Badge>;
   };
 
+  // Permission checks
   const canApproveBookings = profile && ['admin', 'fleet_manager'].includes(profile.role);
   const canViewAllBookings = profile && ['admin', 'fleet_manager'].includes(profile.role);
 
@@ -160,14 +223,26 @@ const BookingList: React.FC<BookingListProps> = ({ filter = 'all' }) => {
     return (
       booking.reason?.toLowerCase().includes(searchLower) ||
       booking.destination?.toLowerCase().includes(searchLower) ||
-      booking.cars.make.toLowerCase().includes(searchLower) ||
-      booking.cars.model.toLowerCase().includes(searchLower) ||
-      booking.cars.license_plate.toLowerCase().includes(searchLower) ||
-      booking.profiles.first_name.toLowerCase().includes(searchLower) ||
-      booking.profiles.last_name.toLowerCase().includes(searchLower)
+      booking.cars?.make?.toLowerCase().includes(searchLower) ||
+      booking.cars?.model?.toLowerCase().includes(searchLower) ||
+      booking.cars?.license_plate?.toLowerCase().includes(searchLower) ||
+      booking.profiles?.first_name?.toLowerCase().includes(searchLower) ||
+      booking.profiles?.last_name?.toLowerCase().includes(searchLower)
     );
   });
 
+  // Handle search input change
+  const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setSearchTerm(e.target.value);
+  };
+
+  // Handle status filter change
+  const handleStatusFilterChange = (value: string) => {
+    setStatusFilter(value);
+    setPage(1); // Reset page when filter changes
+  };
+
+  // Loading state for initial load
   if (loading && bookings.length === 0) {
     return (
       <div className="flex items-center justify-center py-8">
@@ -179,7 +254,7 @@ const BookingList: React.FC<BookingListProps> = ({ filter = 'all' }) => {
 
   return (
     <div className="space-y-6">
-      {/* Filters */}
+      {/* Search and Filter Controls */}
       <Card>
         <CardContent className="p-4">
           <div className="flex flex-col md:flex-row gap-4">
@@ -189,16 +264,16 @@ const BookingList: React.FC<BookingListProps> = ({ filter = 'all' }) => {
                 <Input
                   placeholder="Search bookings..."
                   value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
+                  onChange={handleSearchChange}
                   className="pl-10"
                 />
               </div>
             </div>
             <div className="flex gap-2">
-              <Select value={statusFilter} onValueChange={setStatusFilter}>
+              <Select value={statusFilter} onValueChange={handleStatusFilterChange}>
                 <SelectTrigger className="w-[150px]">
                   <Filter className="h-4 w-4 mr-2" />
-                  <SelectValue />
+                  <SelectValue placeholder="Status" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Status</SelectItem>
@@ -217,7 +292,17 @@ const BookingList: React.FC<BookingListProps> = ({ filter = 'all' }) => {
       {/* Error Alert */}
       {error && (
         <Alert variant="destructive">
-          <AlertDescription>{error}</AlertDescription>
+          <AlertDescription>
+            {error}
+            <Button 
+              variant="outline" 
+              size="sm" 
+              className="ml-2"
+              onClick={() => loadBookings(true)}
+            >
+              Retry
+            </Button>
+          </AlertDescription>
         </Alert>
       )}
 
@@ -253,9 +338,11 @@ const BookingList: React.FC<BookingListProps> = ({ filter = 'all' }) => {
                         <Car className="h-5 w-5 text-blue-600" />
                         <div>
                           <h3 className="font-semibold text-lg">
-                            {booking.cars.make} {booking.cars.model}
+                            {booking.cars?.make} {booking.cars?.model}
                           </h3>
-                          <p className="text-sm text-gray-500">{booking.cars.license_plate}</p>
+                          <p className="text-sm text-gray-500">
+                            {booking.cars?.license_plate}
+                          </p>
                         </div>
                       </div>
                       {getStatusBadge(booking.status)}
@@ -274,7 +361,7 @@ const BookingList: React.FC<BookingListProps> = ({ filter = 'all' }) => {
                           {format(new Date(booking.start_time), 'p')} - {format(new Date(booking.end_time), 'p')}
                         </span>
                       </div>
-                      {canViewAllBookings && (
+                      {canViewAllBookings && booking.profiles && (
                         <div className="flex items-center gap-2">
                           <User className="h-4 w-4 text-gray-400" />
                           <span>
@@ -296,9 +383,16 @@ const BookingList: React.FC<BookingListProps> = ({ filter = 'all' }) => {
                         <span className="text-gray-600">{booking.reason}</span>
                       </div>
                     )}
+
+                    {booking.notes && (
+                      <div className="text-sm">
+                        <span className="font-medium">Notes: </span>
+                        <span className="text-gray-600">{booking.notes}</span>
+                      </div>
+                    )}
                   </div>
 
-                  {/* Actions */}
+                  {/* Action Buttons */}
                   <div className="flex flex-col sm:flex-row gap-2 min-w-fit">
                     <Button
                       variant="outline"
@@ -335,15 +429,12 @@ const BookingList: React.FC<BookingListProps> = ({ filter = 'all' }) => {
         )}
       </div>
 
-      {/* Load More */}
+      {/* Load More Button */}
       {hasMore && filteredBookings.length > 0 && (
         <div className="text-center">
           <Button
             variant="outline"
-            onClick={() => {
-              setPage(prev => prev + 1);
-              loadBookings();
-            }}
+            onClick={handleLoadMore}
             disabled={loading}
           >
             {loading ? (
