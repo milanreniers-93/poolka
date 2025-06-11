@@ -210,10 +210,14 @@ router.get('/stats', verifyAuth, async (req, res) => {
         vehicleGrowthRate: cars.filter(c => new Date(c.created_at) >= lastMonth).length,
         bookingGrowthRate: bookings.filter(b => new Date(b.created_at) >= thisMonth).length - 
 <<<<<<< HEAD
+<<<<<<< HEAD
                           bookings.filter(b => new Date(b.created_at) >= lastMonth && new Date(b.created_at) < thisMonth).length,
 =======
                           bookings.filter(b => new Date(b.created_at) >= lastMonth && New Date(b.created_at) < thisMonth).length,
 >>>>>>> moving_db_calls_to_backend
+=======
+                          bookings.filter(b => new Date(b.created_at) >= lastMonth && new Date(b.created_at) < thisMonth).length,
+>>>>>>> ed03e63136c89fbc450706eac04600a593c9c92a
       },
 
       // Health indicators
@@ -223,9 +227,12 @@ router.get('/stats', verifyAuth, async (req, res) => {
         ).length,
         pendingApprovals: bookings.filter(b => b.status === 'pending').length,
 <<<<<<< HEAD
+<<<<<<< HEAD
 =======
 <<<<<<< HEAD
 >>>>>>> 5ca7e49a23da53190a11dab9b09fa9e058446761
+=======
+>>>>>>> ed03e63136c89fbc450706eac04600a593c9c92a
         overdueBookings: bookings.filter(b => 
           new Date(b.end_time) < now && b.status === 'in_progress'
         ).length,
@@ -436,6 +443,7 @@ router.put('/plan', verifyAuth, async (req, res) => {
 });
 
 <<<<<<< HEAD
+<<<<<<< HEAD
 module.exports = router;
 =======
 module.exports = router;
@@ -443,3 +451,6 @@ module.exports = router;
         overdueBook
 >>>>>>> moving_db_calls_to_backend
 >>>>>>> 5ca7e49a23da53190a11dab9b09fa9e058446761
+=======
+module.exports = router;
+>>>>>>> ed03e63136c89fbc450706eac04600a593c9c92a
