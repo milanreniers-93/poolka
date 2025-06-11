@@ -1,4 +1,4 @@
-// server.js
+// server.js - Updated with all new routes
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
@@ -7,6 +7,14 @@ const rateLimit = require('express-rate-limit');
 const morgan = require('morgan');
 
 // Import routes
+<<<<<<< HEAD
+const { router: authRoutes } = require('./routes/auth');
+=======
+>>>>>>> 5ca7e49a23da53190a11dab9b09fa9e058446761
+const bookingRoutes = require('./routes/bookings');
+const carRoutes = require('./routes/cars');
+const profileRoutes = require('./routes/profiles');
+const organizationRoutes = require('./routes/organizations');
 const inviteRoutes = require('./routes/invite');
 const healthRoutes = require('./routes/health');
 
@@ -16,7 +24,7 @@ const PORT = process.env.PORT || 5000;
 // Security middleware
 app.use(helmet());
 
-// CORS configuration
+// CORS configurationf
 app.use(cors({
   origin: process.env.FRONTEND_URL || 'http://localhost:8080',
   credentials: true,
@@ -47,7 +55,15 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // API Routes
 app.use('/api/health', healthRoutes);
-app.use('/api', inviteRoutes);
+<<<<<<< HEAD
+app.use('/api/auth', authRoutes);
+=======
+>>>>>>> 5ca7e49a23da53190a11dab9b09fa9e058446761
+app.use('/api/bookings', bookingRoutes);
+app.use('/api/cars', carRoutes);
+app.use('/api/profiles', profileRoutes);
+app.use('/api/organizations', organizationRoutes);
+app.use('/api', inviteRoutes); // Keep invite routes at root level for compatibility
 
 // Root endpoint
 app.get('/', (req, res) => {
@@ -55,7 +71,16 @@ app.get('/', (req, res) => {
     message: 'Fleet Management API',
     version: '1.0.0',
     status: 'running',
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    endpoints: {
+      health: '/api/health',
+      auth: '/api/auth',
+      bookings: '/api/bookings',
+      cars: '/api/cars',
+      profiles: '/api/profiles',
+      organizations: '/api/organizations',
+      invite: '/api/invite-users'
+    }
   });
 });
 
@@ -64,7 +89,16 @@ app.use('*', (req, res) => {
   res.status(404).json({
     error: 'Route not found',
     path: req.originalUrl,
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    availableEndpoints: [
+      '/api/health',
+      '/api/auth',
+      '/api/bookings', 
+      '/api/cars',
+      '/api/profiles',
+      '/api/organizations',
+      '/api/invite-users'
+    ]
   });
 });
 
@@ -85,6 +119,13 @@ app.listen(PORT, () => {
   console.log(`📊 Environment: ${process.env.NODE_ENV}`);
   console.log(`🌐 CORS enabled for: ${process.env.FRONTEND_URL || 'http://localhost:8080'}`);
   console.log(`⏰ Started at: ${new Date().toISOString()}`);
+  console.log(`🛣️  Available routes:`);
+  console.log(`   • Health: http://localhost:${PORT}/api/health`);
+  console.log(`   • Auth: http://localhost:${PORT}/api/auth`);
+  console.log(`   • Bookings: http://localhost:${PORT}/api/bookings`);
+  console.log(`   • Cars: http://localhost:${PORT}/api/cars`);
+  console.log(`   • Profiles: http://localhost:${PORT}/api/profiles`);
+  console.log(`   • Organizations: http://localhost:${PORT}/api/organizations`);
 });
 
 // Graceful shutdown

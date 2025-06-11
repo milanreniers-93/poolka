@@ -12,7 +12,7 @@ export const supabase = createClient<Database>(
     auth: {
       persistSession: true,
       storage: typeof window !== 'undefined' ? window.localStorage : undefined,
-      storageKey: 'fleet-manager-auth', // Unique storage key to avoid conflicts
+      storageKey: 'fleet-flow-auth', // Unique storage key to avoid conflicts
     }
   }
 );
