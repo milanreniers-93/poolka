@@ -1,4 +1,4 @@
-// src/contexts/auth/AuthContext.tsx - Rewritten with proper loading management
+// src/contexts/auth/AuthContext.tsx - Fixed with upsert for profile creation
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { User, Session } from '@supabase/supabase-js';
 import { supabase } from '@/lib/supabase';
@@ -13,6 +13,7 @@ import type {
   ProfileUpdate,
   OrganizationUpdate,
 } from './types';
+
 const API_BASE_URL = import.meta.env.VITE_API_URL
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
@@ -276,7 +277,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   
       const { data, error } = await supabase
         .from('profiles')
-        .insert(profileData)
+        .upsert(profileData, { onConflict: 'id' })
         .select()
         .single();
   
@@ -319,7 +320,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         company_size: organizationData.companySize,
         fleet_size: organizationData.fleetSize,
         pricing_plan_id: organizationData.pricingPlanId,
-        subscription_status: 'free' as const, // Start with free instead of trial
+        subscription_status: 'trial' as const, 
       };
 
       const { data: orgData, error: orgError } = await supabase
@@ -366,8 +367,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       console.log('AuthContext: Auth user created:', authData.user.id);
 
-      // Step 3: Explicitly create profile (don't rely on triggers)
-      console.log('AuthContext: Creating profile...');
+      // Step 3: Upsert profile (handle trigger-created profiles)
+      console.log('AuthContext: Upserting profile...');
       const profileData = {
         id: authData.user.id,
         email: userData.email,
@@ -379,13 +380,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         license_expiry: userData.licenseExpiry,
         organization_id: orgData.id,
         is_active: true,
-        created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       };
 
       const { data: profile, error: profileError } = await supabase
         .from('profiles')
-        .insert(profileData) // Use insert instead of upsert for new users
+        .upsert(profileData, { onConflict: 'id' }) // Handle trigger-created profiles
         .select()
         .single();
 
@@ -479,50 +479,50 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-// Updated inviteUsers function in AuthContext.tsx
-const inviteUsers = async (emails: string[], role: UserRole = 'driver'): Promise<void> => {
-  console.log('🚀 Starting invitation process for emails:', emails);
-  console.log('📋 Role:', role);
-  console.log('🏢 Organization ID:', profile?.organization_id);
-  
-  if (!profile?.organization_id) {
-    throw new Error('No organization found');
-  }
-
-  if (!user?.id) {
-    throw new Error('User not authenticated');
-  }
-
-  try {
-    // Call your backend API endpoint instead of admin function
-    const response = await fetch(`${API_BASE_URL}/api/invite-users`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        // Include auth token if needed
-        'Authorization': `Bearer ${session?.access_token}`,
-      },
-      body: JSON.stringify({
-        emails,
-        role,
-        organization_id: profile.organization_id,
-        invited_by: user.id,
-      }),
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+  // Updated inviteUsers function in AuthContext.tsx
+  const inviteUsers = async (emails: string[], role: UserRole = 'driver'): Promise<void> => {
+    console.log('🚀 Starting invitation process for emails:', emails);
+    console.log('📋 Role:', role);
+    console.log('🏢 Organization ID:', profile?.organization_id);
+    
+    if (!profile?.organization_id) {
+      throw new Error('No organization found');
     }
 
-    const result = await response.json();
-    console.log('✅ Invitations sent successfully:', result);
-    
-  } catch (error) {
-    console.error('❌ Error sending invitations:', error);
-    throw error;
-  }
-};
+    if (!user?.id) {
+      throw new Error('User not authenticated');
+    }
+
+    try {
+      // Call your backend API endpoint instead of admin function
+      const response = await fetch(`${API_BASE_URL}/api/invite-users`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          // Include auth token if needed
+          'Authorization': `Bearer ${session?.access_token}`,
+        },
+        body: JSON.stringify({
+          emails,
+          role,
+          organization_id: profile.organization_id,
+          invited_by: user.id,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+      }
+
+      const result = await response.json();
+      console.log('✅ Invitations sent successfully:', result);
+      
+    } catch (error) {
+      console.error('❌ Error sending invitations:', error);
+      throw error;
+    }
+  };
 
   const value: AuthContextType = {
     user,
