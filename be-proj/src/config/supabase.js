@@ -11,8 +11,8 @@ if (!supabaseUrl || !supabaseServiceKey || !supabaseAnonKey) {
 // Admin client (bypasses RLS - for server-side operations)
 const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey, {
   auth: {
-    autoRefreshToken: false,
-    persistSession: false
+    autoRefreshToken: true,
+    persistSession: true
   }
 });
 

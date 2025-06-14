@@ -1,8 +1,8 @@
-// src/components/booking/BookingForm.tsx - Fixed without database functions
+// src/components/booking/BookingForm.tsx - Updated to use Backend API
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useAuth } from '../../contexts/auth'; 
-import { supabase } from '@/lib/supabase';
+import { useAuth } from '@/contexts/auth/AuthContext';
+import { api } from '@/lib/api';
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
@@ -11,7 +11,7 @@ import { useToast } from '@/components/ui/use-toast';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { format, addHours, addDays, isBefore } from 'date-fns';
-import { Loader2, Car, Users, MapPin } from 'lucide-react';
+import { Loader2, Car, Users, MapPin, Calendar, Clock, AlertCircle } from 'lucide-react';
 
 interface Car {
   id: string;
@@ -25,95 +25,79 @@ interface Car {
   status: 'available' | 'booked' | 'maintenance' | 'out_of_service' | 'retired';
   current_mileage?: number;
   parking_spot?: string;
+  organization_id: string;
 }
 
-const BookingForm: React.FC = () => {
+interface BookingFormProps {
+  editingBooking?: {
+    id: string;
+    car_id: string;
+    start_time: string;
+    end_time: string;
+    reason?: string;
+    destination?: string;
+    passenger_count?: number;
+    notes?: string;
+  };
+}
+
+const BookingForm: React.FC<BookingFormProps> = ({ editingBooking }) => {
   const { user, profile } = useAuth();
   const navigate = useNavigate();
   const { toast } = useToast();
   
-  // Form state
+  const isEditing = !!editingBooking;
+  
+  // Form state - Initialize with editing data if available
   const [startDateTime, setStartDateTime] = useState<string>(
-    format(addHours(new Date(), 1), "yyyy-MM-dd'T'HH:mm")
+    editingBooking?.start_time 
+      ? format(new Date(editingBooking.start_time), "yyyy-MM-dd'T'HH:mm")
+      : format(addHours(new Date(), 1), "yyyy-MM-dd'T'HH:mm")
   );
   const [endDateTime, setEndDateTime] = useState<string>(
-    format(addHours(addDays(new Date(), 1), 1), "yyyy-MM-dd'T'HH:mm")
+    editingBooking?.end_time
+      ? format(new Date(editingBooking.end_time), "yyyy-MM-dd'T'HH:mm")
+      : format(addHours(addDays(new Date(), 1), 1), "yyyy-MM-dd'T'HH:mm")
   );
-  const [reason, setReason] = useState('');
-  const [destination, setDestination] = useState('');
-  const [passengerCount, setPassengerCount] = useState<number>(1);
-  const [notes, setNotes] = useState('');
-  const [selectedCarId, setSelectedCarId] = useState<string>('');
+  const [reason, setReason] = useState(editingBooking?.reason || '');
+  const [destination, setDestination] = useState(editingBooking?.destination || '');
+  const [passengerCount, setPassengerCount] = useState<number>(editingBooking?.passenger_count || 1);
+  const [notes, setNotes] = useState(editingBooking?.notes || '');
+  const [selectedCarId, setSelectedCarId] = useState<string>(editingBooking?.car_id || '');
   
   // Loading states
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [availableCars, setAvailableCars] = useState<Car[]>([]);
   const [isLoadingCars, setIsLoadingCars] = useState(false);
   const [isCheckingAvailability, setIsCheckingAvailability] = useState(false);
+  const [allCars, setAllCars] = useState<Car[]>([]);
 
-  // Smart date handling - update end date when start date changes
-  const handleStartDateTimeChange = (newStartDateTime: string) => {
-    setStartDateTime(newStartDateTime);
+  // Fetch all cars in the organization
+  const fetchAllCars = async () => {
+    if (!profile?.organization_id) return;
     
-    // If new start time is after current end time, adjust end time
-    const newStartDate = new Date(newStartDateTime);
-    const currentEndDate = new Date(endDateTime);
-    
-    if (newStartDate >= currentEndDate) {
-      // Set end time to 2 hours after start time (minimum booking duration)
-      const newEndDate = addHours(newStartDate, 2);
-      const newEndDateTime = format(newEndDate, "yyyy-MM-dd'T'HH:mm");
-      setEndDateTime(newEndDateTime);
+    try {
+      console.log('🔍 Fetching all cars for organization:', profile.organization_id);
       
-      console.log('📅 Auto-adjusted end time:', newEndDateTime);
-      toast({
-        title: 'End time adjusted',
-        description: 'End time has been automatically set to 2 hours after start time.',
-        duration: 3000,
+      // You'll need to add this endpoint to your backend
+      const response = await api.cars.getCars({
+        available_only: true  // This matches your cars route parameter
       });
       
-      // Check availability with new dates after a short delay to ensure state updates
-      setTimeout(() => {
-        if (profile?.organization_id) {
-          checkAvailableCarsWithDates(newStartDateTime, newEndDateTime);
-        }
-      }, 100);
-    } else {
-      // Check availability with current end date
-      setTimeout(() => {
-        if (profile?.organization_id) {
-          checkAvailableCarsWithDates(newStartDateTime, endDateTime);
-        }
-      }, 100);
-    }
-  };
-
-  // Validate end date when it changes
-  const handleEndDateTimeChange = (newEndDateTime: string) => {
-    const newEndDate = new Date(newEndDateTime);
-    const currentStartDate = new Date(startDateTime);
-    
-    if (newEndDate <= currentStartDate) {
+      console.log('✅ Cars fetched:', response.cars?.length || 0);
+      setAllCars(response.cars || []);
+      
+    } catch (error: any) {
+      console.error('❌ Error fetching cars:', error);
       toast({
-        title: 'Invalid end time',
-        description: 'End time must be after start time',
+        title: 'Error',
+        description: 'Failed to load available cars',
         variant: 'destructive',
-        duration: 3000,
       });
-      return;
     }
-    
-    setEndDateTime(newEndDateTime);
-    
-    // Check availability with new end date
-    setTimeout(() => {
-      if (profile?.organization_id) {
-        checkAvailableCarsWithDates(startDateTime, newEndDateTime);
-      }
-    }, 100);
   };
 
-  // Enhanced function to check available cars with specific dates
+  // Check car availability for specific dates
   const checkAvailableCarsWithDates = async (startDateTimeStr?: string, endDateTimeStr?: string) => {
     const start = startDateTimeStr || startDateTime;
     const end = endDateTimeStr || endDateTime;
@@ -144,66 +128,51 @@ const BookingForm: React.FC = () => {
     
     setIsCheckingAvailability(true);
     setAvailableCars([]);
-    setSelectedCarId('');
     
     try {
-      console.log('🔍 Checking available cars for:', {
-        organization: profile.organization_id,
+      console.log('🔍 Checking car availability for:', {
         start: startDate.toISOString(),
-        end: endDate.toISOString()
+        end: endDate.toISOString(),
+        editingId: editingBooking?.id
       });
       
-      // Step 1: Get all available cars in the organization
-      const { data: allCars, error: carsError } = await supabase
-        .from('cars')
-        .select('*')
-        .eq('organization_id', profile.organization_id)
-        .eq('status', 'available')
-        .order('make, model');
+      // Get conflicting bookings - only check approved bookings
+      const conflictResponse = await api.bookings.getBookings({
+        start_date: startDate.toISOString(),
+        end_date: endDate.toISOString(),
+        status: 'approved' // Only check approved bookings for conflicts
+      });
       
-      if (carsError) {
-        console.error('❌ Error fetching cars:', carsError);
-        throw carsError;
-      }
+      console.log('📅 Potential conflicts found:', conflictResponse.bookings?.length || 0);
       
-      console.log('✅ Available cars found:', allCars?.length || 0);
+      // Filter out cars that have conflicts (excluding current booking if editing)
+      const conflictedCarIds = new Set(
+        conflictResponse.bookings
+          ?.filter(booking => 
+            // Exclude current booking if editing
+            !editingBooking || booking.id !== editingBooking.id
+          )
+          ?.map(booking => booking.car_id) || []
+      );
       
-      if (!allCars || allCars.length === 0) {
-        console.log('⚠️ No cars available in organization');
-        setAvailableCars([]);
-        return;
-      }
-      
-      // Step 2: Check for booking conflicts
-      const { data: conflictingBookings, error: bookingsError } = await supabase
-        .from('bookings')
-        .select('car_id')
-        .in('status', ['confirmed', 'in_progress', 'pending'])
-        .or(`and(start_time.lte.${endDate.toISOString()},end_time.gte.${startDate.toISOString()})`);
-      
-      if (bookingsError) {
-        console.error('❌ Error checking booking conflicts:', bookingsError);
-        throw bookingsError;
-      }
-      
-      console.log('📅 Conflicting bookings found:', conflictingBookings?.length || 0);
-      
-      // Step 3: Filter out cars with conflicts
-      const conflictedCarIds = new Set(conflictingBookings?.map(b => b.car_id) || []);
       const availableCars = allCars.filter(car => !conflictedCarIds.has(car.id));
       
-      console.log('✅ Cars available after conflict check:', availableCars.length);
+      console.log('✅ Available cars after conflict check:', availableCars.length);
       
       setAvailableCars(availableCars);
       
+      // Auto-select first available car if none selected, or preserve selection if editing
       if (availableCars.length > 0) {
-        setSelectedCarId(availableCars[0].id);
-        console.log('🚗 Auto-selected car:', availableCars[0].make, availableCars[0].model);
+        if (!selectedCarId || !availableCars.find(car => car.id === selectedCarId)) {
+          setSelectedCarId(availableCars[0].id);
+          console.log('🚗 Auto-selected car:', availableCars[0].make, availableCars[0].model);
+        }
       } else {
-        console.log('⚠️ No cars available after conflict check');
+        setSelectedCarId('');
+        console.log('⚠️ No cars available for selected time period');
       }
       
-    } catch (error) {
+    } catch (error: any) {
       console.error('💥 Error checking car availability:', error);
       toast({
         title: 'Error',
@@ -215,28 +184,75 @@ const BookingForm: React.FC = () => {
     }
   };
 
-  const checkAvailableCars = () => checkAvailableCarsWithDates();
-
-  const checkBookingConflict = async (carId: string, startTime: string, endTime: string): Promise<boolean> => {
-    try {
-      const { data: conflicts, error } = await supabase
-        .from('bookings')
-        .select('id')
-        .eq('car_id', carId)
-        .in('status', ['confirmed', 'in_progress', 'pending'])
-        .or(`and(start_time.lte.${endTime},end_time.gte.${startTime})`);
+  // Smart date handling - update end date when start date changes
+  const handleStartDateTimeChange = (newStartDateTime: string) => {
+    setStartDateTime(newStartDateTime);
+    
+    // If new start time is after current end time, adjust end time
+    const newStartDate = new Date(newStartDateTime);
+    const currentEndDate = new Date(endDateTime);
+    
+    if (newStartDate >= currentEndDate) {
+      // Set end time to 2 hours after start time (minimum booking duration)
+      const newEndDate = addHours(newStartDate, 2);
+      const newEndDateTime = format(newEndDate, "yyyy-MM-dd'T'HH:mm");
+      setEndDateTime(newEndDateTime);
       
-      if (error) {
-        console.error('Error checking booking conflict:', error);
-        return false; // Assume no conflict if we can't check
-      }
+      console.log('📅 Auto-adjusted end time:', newEndDateTime);
+      toast({
+        title: 'End time adjusted',
+        description: 'End time has been automatically set to 2 hours after start time.',
+        duration: 3000,
+      });
       
-      return (conflicts?.length || 0) > 0;
-    } catch (error) {
-      console.error('Error in conflict check:', error);
-      return false;
+      // Check availability with new dates
+      setTimeout(() => {
+        checkAvailableCarsWithDates(newStartDateTime, newEndDateTime);
+      }, 100);
+    } else {
+      // Check availability with current end date
+      setTimeout(() => {
+        checkAvailableCarsWithDates(newStartDateTime, endDateTime);
+      }, 100);
     }
   };
+
+  // Validate end date when it changes
+  const handleEndDateTimeChange = (newEndDateTime: string) => {
+    const newEndDate = new Date(newEndDateTime);
+    const currentStartDate = new Date(startDateTime);
+    
+    if (newEndDate <= currentStartDate) {
+      toast({
+        title: 'Invalid end time',
+        description: 'End time must be after start time',
+        variant: 'destructive',
+        duration: 3000,
+      });
+      return;
+    }
+    
+    setEndDateTime(newEndDateTime);
+    
+    // Check availability with new end date
+    setTimeout(() => {
+      checkAvailableCarsWithDates(startDateTime, newEndDateTime);
+    }, 100);
+  };
+
+  // Initialize form
+  useEffect(() => {
+    if (profile?.organization_id) {
+      fetchAllCars();
+    }
+  }, [profile?.organization_id]);
+
+  // Check availability when cars are loaded
+  useEffect(() => {
+    if (allCars.length > 0 && startDateTime && endDateTime) {
+      checkAvailableCarsWithDates();
+    }
+  }, [allCars, startDateTime, endDateTime]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -290,62 +306,52 @@ const BookingForm: React.FC = () => {
     setIsSubmitting(true);
     
     try {
-      // Final availability check before creating booking
-      const hasConflict = await checkBookingConflict(
-        selectedCarId,
-        new Date(startDateTime).toISOString(),
-        new Date(endDateTime).toISOString()
-      );
+      const bookingData = {
+        car_id: selectedCarId,
+        start_time: new Date(startDateTime).toISOString(),
+        end_time: new Date(endDateTime).toISOString(),
+        reason: reason.trim(),
+        destination: destination.trim() || undefined,
+        passenger_count: passengerCount,
+        notes: notes.trim() || undefined,
+      };
+
+      console.log('📝 Submitting booking:', bookingData);
       
-      if (hasConflict) {
-        toast({
-          title: 'Booking conflict',
-          description: 'This car is no longer available for the selected time',
-          variant: 'destructive',
-        });
-        await checkAvailableCars(); // Refresh available cars
-        return;
-      }
-      
-      // Create the booking
-      const { data, error } = await supabase
-        .from('bookings')
-        .insert([
-          {
-            user_id: user.id,
-            car_id: selectedCarId,
-            start_time: new Date(startDateTime).toISOString(),
-            end_time: new Date(endDateTime).toISOString(),
-            reason: reason.trim(),
-            destination: destination.trim() || null,
-            passenger_count: passengerCount,
-            notes: notes.trim() || null,
-            status: 'pending'
-          }
-        ])
-        .select()
-        .single();
+      let result;
+      if (isEditing) {
+        // Update existing booking
+        result = await api.bookings.updateBooking(editingBooking.id, bookingData);
+        console.log('✅ Booking updated successfully:', editingBooking.id);
         
-      if (error) {
-        console.error('❌ Error creating booking:', error);
-        throw error;
+        toast({
+          title: 'Booking updated',
+          description: 'Your booking has been updated successfully.',
+        });
+      } else {
+        // Create new booking
+        result = await api.bookings.createBooking(bookingData);
+        console.log('✅ Booking created successfully:', result.booking?.id);
+        
+        toast({
+          title: 'Booking created',
+          description: 'Your booking request has been submitted and is pending approval.',
+        });
       }
-      
-      console.log('✅ Booking created successfully:', data.id);
-      
-      toast({
-        title: 'Booking created',
-        description: 'Your booking request has been submitted and is pending approval.',
-      });
       
       // Navigate to the booking details page
-      navigate(`/bookings/${data.id}`);
+      const bookingId = isEditing ? editingBooking.id : result.booking?.id;
+      if (bookingId) {
+        navigate(`/bookings/${bookingId}`);
+      } else {
+        navigate('/bookings');
+      }
       
     } catch (error: any) {
-      console.error('💥 Error creating booking:', error);
+      console.error('💥 Error submitting booking:', error);
       toast({
         title: 'Error',
-        description: error.message || 'Failed to create booking',
+        description: error.message || `Failed to ${isEditing ? 'update' : 'create'} booking`,
         variant: 'destructive',
       });
     } finally {
@@ -353,12 +359,25 @@ const BookingForm: React.FC = () => {
     }
   };
 
+  const getSelectedCarInfo = () => {
+    if (!selectedCarId) return null;
+    return availableCars.find(car => car.id === selectedCarId) || 
+           allCars.find(car => car.id === selectedCarId);
+  };
+
+  const selectedCar = getSelectedCarInfo();
+
   return (
     <Card className="max-w-2xl mx-auto">
       <CardHeader>
-        <CardTitle>Create New Booking</CardTitle>
+        <CardTitle className="flex items-center gap-2">
+          <Calendar className="h-5 w-5" />
+          {isEditing ? 'Edit Booking' : 'Create New Booking'}
+        </CardTitle>
         {profile?.organization_id && (
-          <p className="text-sm text-gray-500">Organization: {profile.organization_id}</p>
+          <p className="text-sm text-gray-500">
+            Booking for your organization
+          </p>
         )}
       </CardHeader>
       <form onSubmit={handleSubmit}>
@@ -366,7 +385,10 @@ const BookingForm: React.FC = () => {
           {/* Date and Time Selection */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label htmlFor="start-datetime">Start Date & Time *</Label>
+              <Label htmlFor="start-datetime" className="flex items-center gap-2">
+                <Clock className="h-4 w-4" />
+                Start Date & Time *
+              </Label>
               <Input
                 id="start-datetime"
                 type="datetime-local"
@@ -377,7 +399,10 @@ const BookingForm: React.FC = () => {
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="end-datetime">End Date & Time *</Label>
+              <Label htmlFor="end-datetime" className="flex items-center gap-2">
+                <Clock className="h-4 w-4" />
+                End Date & Time *
+              </Label>
               <Input
                 id="end-datetime"
                 type="datetime-local"
@@ -389,9 +414,48 @@ const BookingForm: React.FC = () => {
             </div>
           </div>
 
+          {/* Duration Display */}
+          {startDateTime && endDateTime && (() => {
+            const start = new Date(startDateTime);
+            const end = new Date(endDateTime);
+            const diffMs = end.getTime() - start.getTime();
+            const totalHours = diffMs / (1000 * 60 * 60);
+            
+            const days = Math.floor(totalHours / 24);
+            const hours = Math.floor(totalHours % 24);
+            const minutes = Math.round((totalHours - Math.floor(totalHours)) * 60);
+            
+            let durationText = '';
+            
+            if (days > 0) {
+              durationText += `${days} day${days !== 1 ? 's' : ''}`;
+              if (hours > 0) {
+                durationText += ` ${hours} hour${hours !== 1 ? 's' : ''}`;
+              }
+              if (minutes > 0 && hours === 0) {
+                durationText += ` ${minutes} min`;
+              }
+            } else if (hours > 0) {
+              durationText = `${hours} hour${hours !== 1 ? 's' : ''}${minutes > 0 ? ` ${minutes} min` : ''}`;
+            } else {
+              durationText = `${minutes} minute${minutes !== 1 ? 's' : ''}`;
+            }
+            
+            return (
+              <div className="p-3 bg-blue-50 rounded-lg">
+                <p className="text-sm text-blue-800">
+                  <strong>Duration:</strong> {durationText}
+                </p>
+              </div>
+            );
+          })()}
+
           {/* Available Cars */}
           <div className="space-y-2">
-            <Label htmlFor="car-selection">Available Cars</Label>
+            <Label htmlFor="car-selection" className="flex items-center gap-2">
+              <Car className="h-4 w-4" />
+              Available Cars
+            </Label>
             {isCheckingAvailability ? (
               <div className="flex items-center justify-center p-4 border rounded-md">
                 <Loader2 className="h-4 w-4 animate-spin mr-2" />
@@ -399,39 +463,67 @@ const BookingForm: React.FC = () => {
               </div>
             ) : availableCars.length === 0 ? (
               <div className="p-4 border rounded-md bg-yellow-50">
-                <p className="text-yellow-800 mb-2">
-                  No cars available for the selected time period.
-                </p>
-                <p className="text-sm text-yellow-700">
-                  • Make sure your organization has cars marked as "available"<br/>
-                  • Try selecting different dates/times<br/>
-                  • Check if cars are already booked during this period
-                </p>
+                <div className="flex items-start gap-2">
+                  <AlertCircle className="h-5 w-5 text-yellow-600 mt-0.5" />
+                  <div>
+                    <p className="text-yellow-800 font-medium mb-2">
+                      No cars available for the selected time period.
+                    </p>
+                    <p className="text-sm text-yellow-700">
+                      • Try selecting different dates/times<br/>
+                      • Check if cars are already booked during this period<br/>
+                      • Contact your fleet manager if you need assistance
+                    </p>
+                  </div>
+                </div>
               </div>
             ) : (
-              <Select value={selectedCarId} onValueChange={setSelectedCarId}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select a car" />
-                </SelectTrigger>
-                <SelectContent>
-                  {availableCars.map((car) => (
-                    <SelectItem key={car.id} value={car.id}>
-                      <div className="flex items-center space-x-2">
-                        <Car className="h-4 w-4" />
-                        <span>
-                          {car.make} {car.model} ({car.license_plate})
-                        </span>
-                        <span className="text-sm text-gray-500">
-                          • {car.seats} seats • {car.transmission}
-                        </span>
-                      </div>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <>
+                <Select value={selectedCarId} onValueChange={setSelectedCarId}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select a car" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {availableCars.map((car) => (
+                      <SelectItem key={car.id} value={car.id}>
+                        <div className="flex items-center space-x-2">
+                          <Car className="h-4 w-4" />
+                          <span>
+                            {car.make} {car.model} ({car.year})
+                          </span>
+                          <span className="text-sm text-gray-500">
+                            • {car.license_plate} • {car.seats} seats
+                          </span>
+                        </div>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                
+                {/* Selected Car Details */}
+                {selectedCar && (
+                  <div className="p-3 bg-gray-50 rounded-lg">
+                    <div className="flex items-center gap-2 mb-2">
+                      <Car className="h-4 w-4 text-gray-600" />
+                      <span className="font-medium">
+                        {selectedCar.make} {selectedCar.model} ({selectedCar.year})
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-4 text-sm text-gray-600">
+                      <div>License: {selectedCar.license_plate}</div>
+                      <div>Seats: {selectedCar.seats}</div>
+                      <div>Fuel: {selectedCar.fuel_type}</div>
+                      <div>Transmission: {selectedCar.transmission}</div>
+                      {selectedCar.parking_spot && (
+                        <div>Parking: {selectedCar.parking_spot}</div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </>
             )}
             <p className="text-xs text-gray-500">
-              {availableCars.length} car{availableCars.length !== 1 ? 's' : ''} available
+              {availableCars.length} car{availableCars.length !== 1 ? 's' : ''} available for selected time
             </p>
           </div>
 
@@ -448,7 +540,10 @@ const BookingForm: React.FC = () => {
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="destination">Destination</Label>
+              <Label htmlFor="destination" className="flex items-center gap-2">
+                <MapPin className="h-4 w-4" />
+                Destination
+              </Label>
               <Input
                 id="destination"
                 placeholder="e.g., Downtown office, Airport"
@@ -459,9 +554,11 @@ const BookingForm: React.FC = () => {
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="passenger-count">Number of Passengers *</Label>
+            <Label htmlFor="passenger-count" className="flex items-center gap-2">
+              <Users className="h-4 w-4" />
+              Number of Passengers *
+            </Label>
             <div className="flex items-center space-x-2">
-              <Users className="h-4 w-4 text-gray-500" />
               <Input
                 id="passenger-count"
                 type="number"
@@ -472,8 +569,15 @@ const BookingForm: React.FC = () => {
                 className="w-24"
                 required
               />
-              <span className="text-sm text-gray-500">passengers</span>
+              <span className="text-sm text-gray-500">
+                passengers {selectedCar && `(max ${selectedCar.seats})`}
+              </span>
             </div>
+            {selectedCar && passengerCount > selectedCar.seats && (
+              <p className="text-sm text-red-600">
+                Warning: This exceeds the car's seating capacity of {selectedCar.seats}
+              </p>
+            )}
           </div>
 
           <div className="space-y-2">
@@ -489,7 +593,11 @@ const BookingForm: React.FC = () => {
         </CardContent>
         
         <CardFooter className="flex justify-between">
-          <Button type="button" variant="outline" onClick={() => navigate('/bookings')}>
+          <Button 
+            type="button" 
+            variant="outline" 
+            onClick={() => navigate(isEditing ? `/bookings/${editingBooking.id}` : '/bookings')}
+          >
             Cancel
           </Button>
           <Button 
@@ -499,10 +607,12 @@ const BookingForm: React.FC = () => {
             {isSubmitting ? (
               <>
                 <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                Creating...
+                {isEditing ? 'Updating...' : 'Creating...'}
               </>
             ) : (
-              'Create Booking'
+              <>
+                {isEditing ? 'Update Booking' : 'Create Booking'}
+              </>
             )}
           </Button>
         </CardFooter>

@@ -1,15 +1,14 @@
-// src/components/booking/BookingCalendar.tsx
+// src/components/booking/BookingCalendar.tsx - Updated Version
 import React, { useState, useEffect } from 'react';
-import { supabase } from '@/lib/supabase';
-import { useAuth } from '../../contexts/auth';
-import { usePermissions } from '../auth'; 
+import { useAuth } from '@/contexts/auth/AuthContext';
+import { api } from '@/lib/api';
 import { format, startOfMonth, endOfMonth, eachDayOfInterval, startOfWeek, endOfWeek, isSameMonth, addMonths, subMonths, isSameDay, addDays } from 'date-fns';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import { Loader2, ChevronLeft, ChevronRight, Car } from 'lucide-react';
+import { Loader2, ChevronLeft, ChevronRight, Car, CheckCircle, Clock, XCircle } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
-interface Booking {
+interface CalendarBooking {
   id: string;
   user_id: string;
   car_id: string;
@@ -17,26 +16,44 @@ interface Booking {
   end_time: string;
   reason?: string;
   destination?: string;
-  status: 'pending' | 'confirmed' | 'in_progress' | 'completed' | 'cancelled';
+  // Updated status enum to match database
+  status: 'pending' | 'approved' | 'rejected' | 'completed' | 'cancelled';
   car?: {
+    id: string;
     make: string;
     model: string;
     license_plate: string;
   };
   user?: {
+    id: string;
     first_name: string;
     last_name: string;
   };
 }
 
+interface CalendarEvent {
+  id: string;
+  title: string;
+  start: string;
+  end: string;
+  status: string;
+  car: any;
+  user: any;
+  reason?: string;
+  destination?: string;
+  isOwn: boolean;
+}
+
 const BookingCalendar: React.FC = () => {
   const { user, profile } = useAuth();
-  const { canViewAllBookings } = usePermissions();
   const [currentMonth, setCurrentMonth] = useState(new Date());
-  const [bookings, setBookings] = useState<Booking[]>([]);
+  const [bookings, setBookings] = useState<CalendarBooking[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const navigate = useNavigate();
+
+  // Permission checks
+  const canViewAllBookings = profile && ['admin', 'fleet_manager'].includes(profile.role);
 
   const fetchBookings = async () => {
     if (!user || !profile) return;
@@ -48,76 +65,44 @@ const BookingCalendar: React.FC = () => {
     const endDate = endOfMonth(currentMonth);
     
     try {
-      let query = supabase
-        .from('bookings')
-        .select(`
-          id,
-          user_id,
-          car_id,
-          start_time,
-          end_time,
-          reason,
-          destination,
-          status
-        `)
-        .gte('start_time', startDate.toISOString())
-        .lte('start_time', endDate.toISOString())
-        .neq('status', 'cancelled') // ✅ Fixed: use 'cancelled' instead of 'declined'
-        .order('start_time', { ascending: true });
-      
-      // Apply user filter based on permissions
-      if (!canViewAllBookings) {
-        query = query.eq('user_id', user.id);
-      }
-      
-      const { data: bookingsData, error: bookingsError } = await query;
-      
-      if (bookingsError) throw bookingsError;
-      
-      if (!bookingsData || bookingsData.length === 0) {
+      console.log('🔍 Calendar Debug - Fetching bookings for:', {
+        start: startDate.toISOString(),
+        end: endDate.toISOString(),
+        canViewAll: canViewAllBookings
+      });
+
+      // Use the new API endpoint for calendar data
+      const response = await api.bookings.getCalendarData(
+        startDate.toISOString(),
+        endDate.toISOString()
+      );
+
+      console.log('✅ Calendar Debug - API response:', response);
+
+      if (response && response.events) {
+        // Transform calendar events to booking format for compatibility
+        const transformedBookings: CalendarBooking[] = response.events.map((event: CalendarEvent) => ({
+          id: event.id,
+          user_id: event.user?.id || '',
+          car_id: event.car?.id || '',
+          start_time: event.start,
+          end_time: event.end,
+          reason: event.reason,
+          destination: event.destination,
+          status: event.status as CalendarBooking['status'],
+          car: event.car,
+          user: event.user
+        }));
+
+        setBookings(transformedBookings);
+      } else {
         setBookings([]);
-        return;
       }
-      
-      // Get car information
-      const carIds = [...new Set(bookingsData.map(b => b.car_id))];
-      const { data: carsData, error: carsError } = await supabase
-        .from('cars')
-        .select('id, make, model, license_plate')
-        .in('id', carIds);
-      
-      if (carsError) {
-        console.warn('Error fetching car data:', carsError);
-      }
-      
-      // Get user information if viewing all bookings
-      let usersData = null;
-      if (canViewAllBookings) {
-        const userIds = [...new Set(bookingsData.map(b => b.user_id))];
-        const { data, error: usersError } = await supabase
-          .from('profiles')
-          .select('id, first_name, last_name')
-          .in('id', userIds);
-        
-        if (usersError) {
-          console.warn('Error fetching user data:', usersError);
-        } else {
-          usersData = data;
-        }
-      }
-      
-      // Combine data
-      const enrichedBookings = bookingsData.map(booking => ({
-        ...booking,
-        car: carsData?.find(car => car.id === booking.car_id),
-        user: usersData?.find(user => user.id === booking.user_id)
-      }));
-      
-      setBookings(enrichedBookings);
       
     } catch (error: any) {
-      console.error('Error fetching bookings:', error);
-      setError(error.message || 'Failed to load bookings');
+      console.error('❌ Calendar Error:', error);
+      setError(error.message || 'Failed to load calendar data');
+      setBookings([]);
     } finally {
       setIsLoading(false);
     }
@@ -185,19 +170,36 @@ const BookingCalendar: React.FC = () => {
     });
   };
 
-  const getBookingStatusColor = (status: string) => {
-    switch (status) {
-      case 'confirmed':
-        return 'bg-green-100 text-green-800 border-green-200';
-      case 'pending':
-        return 'bg-yellow-100 text-yellow-800 border-yellow-200';
-      case 'in_progress':
-        return 'bg-blue-100 text-blue-800 border-blue-200';
-      case 'completed':
-        return 'bg-gray-100 text-gray-800 border-gray-200';
-      default:
-        return 'bg-gray-100 text-gray-600 border-gray-200';
-    }
+  const getBookingStatusConfig = (status: string) => {
+    const configs = {
+      pending: { 
+        color: 'bg-yellow-100 text-yellow-800 border-yellow-200', 
+        icon: Clock,
+        label: 'Pending'
+      },
+      approved: { 
+        color: 'bg-green-100 text-green-800 border-green-200', 
+        icon: CheckCircle,
+        label: 'Approved'
+      },
+      rejected: { 
+        color: 'bg-red-100 text-red-800 border-red-200', 
+        icon: XCircle,
+        label: 'Rejected'
+      },
+      completed: { 
+        color: 'bg-gray-100 text-gray-800 border-gray-200', 
+        icon: CheckCircle,
+        label: 'Completed'
+      },
+      cancelled: { 
+        color: 'bg-gray-100 text-gray-600 border-gray-200', 
+        icon: XCircle,
+        label: 'Cancelled'
+      }
+    };
+    
+    return configs[status as keyof typeof configs] || configs.pending;
   };
 
   const renderCalendarCells = () => {
@@ -242,35 +244,41 @@ const BookingCalendar: React.FC = () => {
                 
                 {/* Bookings */}
                 <div className="space-y-1 overflow-hidden">
-                  {dayBookings.slice(0, 3).map((booking) => (
-                    <div
-                      key={booking.id}
-                      className={`text-xs p-1 rounded border cursor-pointer hover:shadow-sm transition-shadow ${getBookingStatusColor(booking.status)}`}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        navigate(`/bookings/${booking.id}`);
-                      }}
-                      title={`${booking.reason || 'Booking'} - ${booking.car?.make} ${booking.car?.model}`}
-                    >
-                      <div className="flex items-center space-x-1">
-                        <Car className="h-3 w-3 flex-shrink-0" />
-                        <span className="truncate">
-                          {format(new Date(booking.start_time), 'HH:mm')}
-                          {booking.car && ` - ${booking.car.make}`}
-                        </span>
+                  {dayBookings.slice(0, 3).map((booking) => {
+                    const statusConfig = getBookingStatusConfig(booking.status);
+                    const StatusIcon = statusConfig.icon;
+                    
+                    return (
+                      <div
+                        key={booking.id}
+                        className={`text-xs p-1 rounded border cursor-pointer hover:shadow-sm transition-shadow ${statusConfig.color}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          navigate(`/bookings/${booking.id}`);
+                        }}
+                        title={`${booking.reason || 'Booking'} - ${booking.car?.make} ${booking.car?.model} (${statusConfig.label})`}
+                      >
+                        <div className="flex items-center space-x-1">
+                          <StatusIcon className="h-3 w-3 flex-shrink-0" />
+                          <Car className="h-3 w-3 flex-shrink-0" />
+                          <span className="truncate">
+                            {format(new Date(booking.start_time), 'HH:mm')}
+                            {booking.car && ` - ${booking.car.make}`}
+                          </span>
+                        </div>
+                        {booking.reason && (
+                          <div className="truncate mt-0.5 opacity-75">
+                            {booking.reason}
+                          </div>
+                        )}
+                        {canViewAllBookings && booking.user && (
+                          <div className="truncate text-xs opacity-75">
+                            {booking.user.first_name} {booking.user.last_name}
+                          </div>
+                        )}
                       </div>
-                      {booking.reason && (
-                        <div className="truncate mt-0.5 opacity-75">
-                          {booking.reason}
-                        </div>
-                      )}
-                      {canViewAllBookings && booking.user && (
-                        <div className="truncate text-xs opacity-75">
-                          {booking.user.first_name} {booking.user.last_name}
-                        </div>
-                      )}
-                    </div>
-                  ))}
+                    );
+                  })}
                   
                   {dayBookings.length > 3 && (
                     <div className="text-xs text-gray-500 text-center py-1">
@@ -290,23 +298,55 @@ const BookingCalendar: React.FC = () => {
 
   const renderLegend = () => {
     return (
-      <div className="flex items-center justify-end space-x-4 mt-4 text-sm">
-        <div className="flex items-center">
-          <div className="w-4 h-3 rounded bg-green-100 border border-green-200 mr-2"></div>
-          <span>Confirmed</span>
-        </div>
+      <div className="flex items-center justify-end space-x-4 mt-4 text-sm flex-wrap">
         <div className="flex items-center">
           <div className="w-4 h-3 rounded bg-yellow-100 border border-yellow-200 mr-2"></div>
           <span>Pending</span>
         </div>
         <div className="flex items-center">
-          <div className="w-4 h-3 rounded bg-blue-100 border border-blue-200 mr-2"></div>
-          <span>In Progress</span>
+          <div className="w-4 h-3 rounded bg-green-100 border border-green-200 mr-2"></div>
+          <span>Approved</span>
+        </div>
+        <div className="flex items-center">
+          <div className="w-4 h-3 rounded bg-red-100 border border-red-200 mr-2"></div>
+          <span>Rejected</span>
         </div>
         <div className="flex items-center">
           <div className="w-4 h-3 rounded bg-gray-100 border border-gray-200 mr-2"></div>
           <span>Completed</span>
         </div>
+        <div className="flex items-center">
+          <div className="w-4 h-3 rounded bg-gray-100 border border-gray-300 mr-2"></div>
+          <span>Cancelled</span>
+        </div>
+      </div>
+    );
+  };
+
+  const renderStats = () => {
+    if (bookings.length === 0) return null;
+
+    const stats = bookings.reduce((acc, booking) => {
+      acc[booking.status] = (acc[booking.status] || 0) + 1;
+      return acc;
+    }, {} as Record<string, number>);
+
+    return (
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
+        {Object.entries(stats).map(([status, count]) => {
+          const config = getBookingStatusConfig(status);
+          const Icon = config.icon;
+          
+          return (
+            <div key={status} className="text-center p-3 bg-gray-50 rounded-lg">
+              <div className="flex items-center justify-center mb-1">
+                <Icon className="h-4 w-4 mr-1" />
+                <span className="text-sm font-medium capitalize">{config.label}</span>
+              </div>
+              <div className="text-lg font-bold text-gray-900">{count}</div>
+            </div>
+          );
+        })}
       </div>
     );
   };
@@ -340,11 +380,34 @@ const BookingCalendar: React.FC = () => {
         </div>
       ) : (
         <>
+          {renderStats()}
           <div className="overflow-x-auto">
             {renderDaysOfWeek()}
             {renderCalendarCells()}
           </div>
           {renderLegend()}
+          
+          {/* Calendar Actions */}
+          <div className="flex justify-between items-center mt-6 pt-4 border-t">
+            <div className="text-sm text-gray-500">
+              {canViewAllBookings ? 'Showing all bookings' : 'Showing your bookings'}
+            </div>
+            <div className="flex gap-2">
+              <Button 
+                variant="outline" 
+                size="sm"
+                onClick={() => navigate('/bookings')}
+              >
+                View List
+              </Button>
+              <Button 
+                size="sm"
+                onClick={() => navigate('/bookings/new')}
+              >
+                New Booking
+              </Button>
+            </div>
+          </div>
         </>
       )}
     </Card>

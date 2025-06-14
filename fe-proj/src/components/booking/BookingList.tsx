@@ -1,4 +1,4 @@
-// src/components/booking/BookingList.tsx - Fixed version with proper API integration
+// src/components/booking/BookingList.tsx - Complete Updated Version
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/auth/AuthContext';
@@ -9,8 +9,15 @@ import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Loader2, Calendar, Clock, Car, User, MapPin, Search, Filter } from 'lucide-react';
+import { Loader2, Calendar, Clock, Car, User, MapPin, Search, Filter, CheckCircle, XCircle, Users } from 'lucide-react';
 import { format } from 'date-fns';
+import { 
+  BookingStatus, 
+  getBookingStatusConfig, 
+  ALL_BOOKING_STATUSES,
+  calculateBookingDuration,
+  formatBookingTimeRange 
+} from '@/constants/bookingStatus';
 
 interface Booking {
   id: string;
@@ -21,9 +28,17 @@ interface Booking {
   reason?: string;
   destination?: string;
   passenger_count?: number;
-  status: 'pending' | 'confirmed' | 'in_progress' | 'completed' | 'cancelled';
+  // Updated status enum to match database exactly
+  status: BookingStatus;
   notes?: string;
+  // Updated field names to match new schema
+  status_changed_by?: string;
+  status_changed_at?: string;
+  start_mileage?: number;
+  end_mileage?: number;
+  total_cost?: number;
   created_at: string;
+  updated_at: string;
   cars: {
     id: string;
     make: string;
@@ -149,15 +164,25 @@ const BookingList: React.FC<BookingListProps> = ({ filter = 'all' }) => {
     }
   }, [filter, statusFilter, user, profile]);
 
-  // Handle booking approval
+  // Handle booking approval using new dedicated endpoint
   const handleApproveBooking = async (bookingId: string) => {
     try {
-      await api.bookings.updateBooking(bookingId, { status: 'confirmed' });
+      console.log('🔍 Frontend Debug - Approving booking:', bookingId);
+      
+      // Use the new approveBooking API method
+      const result = await api.bookings.approveBooking(bookingId);
+      
+      console.log('✅ Frontend Debug - Booking approved successfully:', result);
       
       // Update local state
       setBookings(prev => prev.map(booking => 
         booking.id === bookingId 
-          ? { ...booking, status: 'confirmed' as const }
+          ? { 
+              ...booking, 
+              status: 'approved' as const,
+              status_changed_by: user?.id,
+              status_changed_at: new Date().toISOString()
+            }
           : booking
       ));
       
@@ -166,6 +191,38 @@ const BookingList: React.FC<BookingListProps> = ({ filter = 'all' }) => {
     } catch (error: any) {
       console.error('❌ Error approving booking:', error);
       setError(error.message || 'Failed to approve booking');
+    }
+  };
+
+  // Handle booking rejection
+  const handleRejectBooking = async (bookingId: string) => {
+    const reason = prompt('Enter rejection reason (optional):');
+    
+    try {
+      console.log('🔍 Frontend Debug - Rejecting booking:', bookingId);
+      
+      // Use the new rejectBooking API method
+      const result = await api.bookings.rejectBooking(bookingId, reason || undefined);
+      
+      console.log('✅ Frontend Debug - Booking rejected successfully:', result);
+      
+      // Update local state
+      setBookings(prev => prev.map(booking => 
+        booking.id === bookingId 
+          ? { 
+              ...booking, 
+              status: 'rejected' as const,
+              status_changed_by: user?.id,
+              status_changed_at: new Date().toISOString()
+            }
+          : booking
+      ));
+      
+      console.log('✅ Booking rejected:', bookingId);
+      
+    } catch (error: any) {
+      console.error('❌ Error rejecting booking:', error);
+      setError(error.message || 'Failed to reject booking');
     }
   };
 
@@ -191,24 +248,59 @@ const BookingList: React.FC<BookingListProps> = ({ filter = 'all' }) => {
     }
   };
 
+  // Handle regular booking updates (editing details)
+  const handleUpdateBooking = async (bookingId: string, updates: {
+    start_time?: string;
+    end_time?: string;
+    reason?: string;
+    destination?: string;
+    passenger_count?: number;
+    notes?: string;
+  }) => {
+    try {
+      console.log('🔍 Frontend Debug - Updating booking:', bookingId, updates);
+      
+      // Use the regular updateBooking API method (no status changes allowed)
+      const result = await api.bookings.updateBooking(bookingId, updates);
+      
+      console.log('✅ Frontend Debug - Booking updated successfully:', result);
+      
+      // Update local state
+      setBookings(prev => prev.map(booking => 
+        booking.id === bookingId 
+          ? { 
+              ...booking, 
+              ...updates,
+              updated_at: new Date().toISOString()
+            }
+          : booking
+      ));
+      
+      console.log('✅ Booking updated:', bookingId);
+      
+    } catch (error: any) {
+      console.error('❌ Error updating booking:', error);
+      setError(error.message || 'Failed to update booking');
+    }
+  };
+
   // Load more bookings (pagination)
   const handleLoadMore = () => {
     setPage(prev => prev + 1);
     loadBookings(false);
   };
 
-  // Get status badge configuration
+  // Get status badge using centralized configuration
   const getStatusBadge = (status: string) => {
-    const statusConfig = {
-      pending: { variant: 'secondary' as const, label: 'Pending' },
-      confirmed: { variant: 'default' as const, label: 'Confirmed' },
-      in_progress: { variant: 'default' as const, label: 'In Progress' },
-      completed: { variant: 'outline' as const, label: 'Completed' },
-      cancelled: { variant: 'destructive' as const, label: 'Cancelled' },
-    };
+    const config = getBookingStatusConfig(status);
+    const Icon = config.icon;
     
-    const config = statusConfig[status as keyof typeof statusConfig] || statusConfig.pending;
-    return <Badge variant={config.variant}>{config.label}</Badge>;
+    return (
+      <Badge variant={config.variant} className="flex items-center gap-1">
+        <Icon className="h-3 w-3" />
+        {config.label}
+      </Badge>
+    );
   };
 
   // Permission checks
@@ -277,11 +369,14 @@ const BookingList: React.FC<BookingListProps> = ({ filter = 'all' }) => {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Status</SelectItem>
-                  <SelectItem value="pending">Pending</SelectItem>
-                  <SelectItem value="confirmed">Confirmed</SelectItem>
-                  <SelectItem value="in_progress">In Progress</SelectItem>
-                  <SelectItem value="completed">Completed</SelectItem>
-                  <SelectItem value="cancelled">Cancelled</SelectItem>
+                  {ALL_BOOKING_STATUSES.map(status => {
+                    const config = getBookingStatusConfig(status);
+                    return (
+                      <SelectItem key={status} value={status}>
+                        {config.label}
+                      </SelectItem>
+                    );
+                  })}
                 </SelectContent>
               </Select>
             </div>
@@ -348,17 +443,28 @@ const BookingList: React.FC<BookingListProps> = ({ filter = 'all' }) => {
                       {getStatusBadge(booking.status)}
                     </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 text-sm">
                       <div className="flex items-center gap-2">
                         <Calendar className="h-4 w-4 text-gray-400" />
                         <span>
-                          {format(new Date(booking.start_time), 'PPP')}
+                          {format(new Date(booking.start_time), 'EEE, MMM d, yyyy')}
                         </span>
                       </div>
                       <div className="flex items-center gap-2">
                         <Clock className="h-4 w-4 text-gray-400" />
                         <span>
-                          {format(new Date(booking.start_time), 'p')} - {format(new Date(booking.end_time), 'p')}
+                          {format(new Date(booking.start_time), 'HH:mm')} - {format(new Date(booking.end_time), 'HH:mm')}
+                          {format(new Date(booking.start_time), 'yyyy-MM-dd') !== format(new Date(booking.end_time), 'yyyy-MM-dd') && (
+                            <span className="text-blue-600 ml-1 font-medium">
+                              (Multi-day)
+                            </span>
+                          )}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Clock className="h-4 w-4 text-gray-400" />
+                        <span className="font-medium text-blue-600">
+                          {calculateBookingDuration(booking.start_time, booking.end_time)}
                         </span>
                       </div>
                       {canViewAllBookings && booking.profiles && (
@@ -373,6 +479,12 @@ const BookingList: React.FC<BookingListProps> = ({ filter = 'all' }) => {
                         <div className="flex items-center gap-2">
                           <MapPin className="h-4 w-4 text-gray-400" />
                           <span>{booking.destination}</span>
+                        </div>
+                      )}
+                      {booking.passenger_count && booking.passenger_count > 1 && (
+                        <div className="flex items-center gap-2">
+                          <Users className="h-4 w-4 text-gray-400" />
+                          <span>{booking.passenger_count} passengers</span>
                         </div>
                       )}
                     </div>
@@ -390,6 +502,17 @@ const BookingList: React.FC<BookingListProps> = ({ filter = 'all' }) => {
                         <span className="text-gray-600">{booking.notes}</span>
                       </div>
                     )}
+
+                    {/* Show approval/rejection info */}
+                    {booking.status_changed_by && booking.status_changed_at && (
+                      <div className="text-sm text-gray-500 bg-gray-50 rounded p-2">
+                        <span className="font-medium">
+                          {booking.status === 'approved' ? 'Approved' : 
+                           booking.status === 'rejected' ? 'Rejected' : 'Updated'} 
+                        </span>{' '}
+                        on {format(new Date(booking.status_changed_at), 'PPp')}
+                      </div>
+                    )}
                   </div>
 
                   {/* Action Buttons */}
@@ -402,23 +525,49 @@ const BookingList: React.FC<BookingListProps> = ({ filter = 'all' }) => {
                       View Details
                     </Button>
                     
+                    {/* Admin/Fleet Manager Actions for Pending Bookings */}
                     {canApproveBookings && booking.status === 'pending' && (
-                      <Button
-                        size="sm"
-                        onClick={() => handleApproveBooking(booking.id)}
-                        className="bg-green-600 hover:bg-green-700"
-                      >
-                        Approve
-                      </Button>
+                      <>
+                        <Button
+                          size="sm"
+                          onClick={() => handleApproveBooking(booking.id)}
+                          className="bg-green-600 hover:bg-green-700"
+                        >
+                          <CheckCircle className="h-4 w-4 mr-1" />
+                          Approve
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="destructive"
+                          onClick={() => handleRejectBooking(booking.id)}
+                        >
+                          <XCircle className="h-4 w-4 mr-1" />
+                          Reject
+                        </Button>
+                      </>
                     )}
                     
-                    {booking.status === 'pending' && booking.user_id === user?.id && (
+                    {/* User Cancellation - can cancel pending or approved bookings */}
+                    {(booking.status === 'pending' || booking.status === 'approved') && 
+                     (booking.user_id === user?.id || canApproveBookings) && (
                       <Button
                         variant="destructive"
                         size="sm"
                         onClick={() => handleCancelBooking(booking.id)}
                       >
                         Cancel
+                      </Button>
+                    )}
+
+                    {/* Edit button for editable bookings */}
+                    {(booking.status === 'pending' || booking.status === 'approved') && 
+                     (booking.user_id === user?.id || canApproveBookings) && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => navigate(`/bookings/${booking.id}/edit`)}
+                      >
+                        Edit
                       </Button>
                     )}
                   </div>

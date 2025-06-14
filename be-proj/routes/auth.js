@@ -1,6 +1,6 @@
-// routes/auth.js - Auth routes using Supabase native auth
+// routes/auth.js - Fixed version
 const express = require('express');
-const { supabaseAdmin, supabaseClient, verifyAuth } = require('../config/supabase');
+const { supabaseAdmin, supabase, verifyAuth } = require('../config/supabase'); // Fix: use correct import
 const router = express.Router();
 
 // POST /api/auth/signup
@@ -65,7 +65,7 @@ router.post('/signup', async (req, res) => {
 
     // Step 2: Create auth user
     console.log('Creating auth user...');
-    const { data: authData, error: authError } = await supabaseClient.auth.signUp({
+    const { data: authData, error: authError } = await supabase.auth.signUp({
       email,
       password,
       options: {
@@ -140,25 +140,35 @@ router.post('/signup', async (req, res) => {
   }
 });
 
-// POST /api/auth/signin
+// POST /api/auth/signin - FIXED VERSION
 router.post('/signin', async (req, res) => {
   try {
     const { email, password } = req.body;
+
+    console.log('🔍 Sign in attempt for email:', email);
 
     if (!email || !password) {
       return res.status(400).json({ error: 'Email and password are required' });
     }
 
-    const { data, error } = await supabaseClient.auth.signInWithPassword({
+    // Fix: Use the correct supabase client reference
+    const { data, error } = await supabase.auth.signInWithPassword({
       email: email.toLowerCase().trim(),
       password,
     });
 
     if (error) {
+      console.error('❌ Supabase auth error:', error);
       return res.status(401).json({ error: error.message });
     }
 
-    // Get user profile
+    if (!data.user) {
+      return res.status(401).json({ error: 'Authentication failed' });
+    }
+
+    console.log('✅ User authenticated:', data.user.id);
+
+    // Get user profile with organization info
     const { data: profile, error: profileError } = await supabaseAdmin
       .from('profiles')
       .select(`
@@ -173,6 +183,13 @@ router.post('/signin', async (req, res) => {
       .eq('id', data.user.id)
       .single();
 
+    if (profileError) {
+      console.error('❌ Profile fetch error:', profileError);
+      return res.status(404).json({ error: 'User profile not found' });
+    }
+
+    console.log('✅ Profile loaded for user:', profile.first_name, profile.last_name);
+
     res.status(200).json({
       message: 'Sign in successful',
       session: data.session,
@@ -181,7 +198,7 @@ router.post('/signin', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Signin error:', error);
+    console.error('💥 Signin error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -189,7 +206,7 @@ router.post('/signin', async (req, res) => {
 // POST /api/auth/signout
 router.post('/signout', verifyAuth, async (req, res) => {
   try {
-    const { error } = await supabaseClient.auth.signOut();
+    const { error } = await supabase.auth.signOut();
     
     if (error) {
       return res.status(400).json({ error: error.message });
@@ -262,7 +279,7 @@ router.put('/change-password', verifyAuth, async (req, res) => {
     }
 
     // First verify current password by attempting sign in
-    const { error: verifyError } = await supabaseClient.auth.signInWithPassword({
+    const { error: verifyError } = await supabase.auth.signInWithPassword({
       email: req.user.email,
       password: currentPassword
     });
@@ -272,7 +289,7 @@ router.put('/change-password', verifyAuth, async (req, res) => {
     }
 
     // Update password
-    const { error: updateError } = await supabaseClient.auth.updateUser({
+    const { error: updateError } = await supabase.auth.updateUser({
       password: newPassword
     });
 
@@ -297,7 +314,7 @@ router.get('/session', async (req, res) => {
     }
 
     const token = authHeader.split(' ')[1];
-    const { data: { user }, error } = await supabaseClient.auth.getUser(token);
+    const { data: { user }, error } = await supabase.auth.getUser(token);
     
     if (error || !user) {
       return res.status(401).json({ error: 'Invalid token' });

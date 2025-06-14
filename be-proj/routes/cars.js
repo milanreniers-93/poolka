@@ -311,11 +311,11 @@ router.delete('/:id', verifyAuth, async (req, res) => {
 
     // Check for active bookings
     const { data: activeBookings, error: bookingsError } = await supabaseAdmin
-      .from('bookings')
-      .select('id')
-      .eq('car_id', id)
-      .in('status', ['confirmed', 'in_progress'])
-      .limit(1);
+    .from('bookings')
+    .select('id')
+    .eq('car_id', id)
+    .in('status', ['approved', 'pending'])  // ← Use valid status values
+    .limit(1);
 
     if (bookingsError) throw bookingsError;
 
@@ -386,12 +386,12 @@ router.get('/availability/:car_id', verifyAuth, async (req, res) => {
 
     // Check for booking conflicts
     const { data: conflicts, error: conflictError } = await supabaseAdmin
-      .from('bookings')
-      .select('id, start_time, end_time, status')
-      .eq('car_id', car_id)
-      .in('status', ['confirmed', 'in_progress'])
-      .or(`and(start_time.lte.${start_time},end_time.gt.${start_time}),and(start_time.lt.${end_time},end_time.gte.${end_time}),and(start_time.gte.${start_time},end_time.lte.${end_time})`);
-
+    .from('bookings')
+    .select('id, start_time, end_time, status')
+    .eq('car_id', car_id)
+    .in('status', ['approved'])  // ← Use valid status values
+    .or(`and(start_time.lte.${start_time},end_time.gt.${start_time}),and(start_time.lt.${end_time},end_time.gte.${end_time}),and(start_time.gte.${start_time},end_time.lte.${end_time})`);
+  
     if (conflictError) throw conflictError;
 
     const hasConflicts = conflicts && conflicts.length > 0;
@@ -528,7 +528,7 @@ router.get('/stats/overview', verifyAuth, async (req, res) => {
       monthlyBookings: bookings.length,
       completedBookings: bookings.filter(b => b.status === 'completed').length,
       pendingBookings: bookings.filter(b => b.status === 'pending').length,
-      activeBookings: bookings.filter(b => b.status === 'in_progress').length,
+      activeBookings: bookings.filter(b => b.status === 'approved').length,
     };
 
     res.status(200).json(stats);

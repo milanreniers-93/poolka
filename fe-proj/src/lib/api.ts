@@ -1,94 +1,59 @@
-// lib/api.ts - Enhanced API client with proper error handling and types
-const API_BASE_URL = import.meta.env.VITE_API_URL;
+// src/lib/api.ts - Improved version with better token handling
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
-// Types for API responses
-export interface ApiResponse<T = any> {
-  data?: T;
-  message?: string;
-  error?: string;
-  pagination?: {
-    page: number;
-    limit: number;
-    total: number;
-  };
-}
-
-export interface Booking {
-  id: string;
-  user_id: string;
-  car_id: string;
-  start_time: string;
-  end_time: string;
-  reason?: string;
-  destination?: string;
-  passenger_count?: number;
-  status: 'pending' | 'confirmed' | 'in_progress' | 'completed' | 'cancelled';
-  notes?: string;
-  created_at: string;
-  updated_at?: string;
-  cars?: {
-    id: string;
-    make: string;
-    model: string;
-    license_plate: string;
-    parking_spot?: string;
-  };
-  profiles?: {
-    id: string;
-    first_name: string;
-    last_name: string;
-    email: string;
-  };
-}
-
-export interface Car {
-  id: string;
-  make: string;
-  model: string;
-  year: number;
-  license_plate: string;
-  seats: number;
-  fuel_type: string;
-  transmission: string;
-  status: 'available' | 'booked' | 'maintenance' | 'out_of_service' | 'retired';
-  color?: string;
-  current_mileage?: number;
-  daily_rate?: number;
-  notes?: string;
-  organization_id: string;
-  created_at: string;
-}
-
-// Enhanced error class
-export class ApiError extends Error {
-  constructor(
-    message: string,
-    public status: number,
-    public code?: string,
-    public details?: any
-  ) {
-    super(message);
-    this.name = 'ApiError';
-  }
-}
-
-// Get auth token from localStorage with better error handling
-const getAuthToken = (): string | null => {
+// Enhanced token retrieval function
+const getAuthToken = () => {
   try {
-    // Get session from Supabase auth storage
-    const authData = localStorage.getItem('sb-' + import.meta.env.VITE_SUPABASE_URL?.split('//')[1]?.split('.')[0] + '-auth-token');
+    // First check the specific key your app uses
+    const authData = localStorage.getItem('fleet-flow-auth');
     if (authData) {
-      const parsed = JSON.parse(authData);
-      return parsed.access_token;
+      try {
+        const parsed = JSON.parse(authData);
+        
+        // Handle different possible structures
+        if (typeof parsed === 'string' && parsed.length > 50) {
+          return parsed; // Direct token
+        }
+        
+        if (parsed.access_token) {
+          return parsed.access_token;
+        }
+        
+        if (parsed.session?.access_token) {
+          return parsed.session.access_token;
+        }
+        
+        if (parsed.currentSession?.access_token) {
+          return parsed.currentSession.access_token;
+        }
+        
+        // Check for nested structures
+        if (parsed.user && parsed.access_token) {
+          return parsed.access_token;
+        }
+        
+      } catch (e) {
+        console.warn('Error parsing auth data:', e);
+      }
     }
-
-    // Fallback: check your custom key
-    const customAuth = localStorage.getItem('fleet-flow-auth');
-    if (customAuth) {
-      const parsed = JSON.parse(customAuth);
-      return parsed.access_token || parsed.session?.access_token;
+    
+    // Fallback: check all Supabase-style keys
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && (key.startsWith('sb-') || key.includes('supabase'))) {
+        try {
+          const data = JSON.parse(localStorage.getItem(key) || '{}');
+          if (data.access_token) {
+            console.log('Found token in fallback key:', key);
+            return data.access_token;
+          }
+        } catch (e) {
+          // Continue to next key
+        }
+      }
     }
-
+    
+    console.warn('No auth token found in localStorage');
     return null;
   } catch (error) {
     console.error('Error getting auth token:', error);
@@ -96,11 +61,8 @@ const getAuthToken = (): string | null => {
   }
 };
 
-// Generic API request function with proper error handling
-export const apiRequest = async <T = any>(
-  endpoint: string, 
-  options: RequestInit = {}
-): Promise<T> => {
+// Enhanced API request function with better error handling
+export const apiRequest = async (endpoint: string, options: RequestInit = {}) => {
   const token = getAuthToken();
   
   const config: RequestInit = {
@@ -115,41 +77,50 @@ export const apiRequest = async <T = any>(
   try {
     const response = await fetch(`${API_BASE_URL}${endpoint}`, config);
     
-    let responseData;
-    try {
-      responseData = await response.json();
-    } catch {
-      responseData = { message: 'Invalid response format' };
-    }
-
+    // Handle different response types
     if (!response.ok) {
-      throw new ApiError(
-        responseData.error || responseData.message || `HTTP ${response.status}`,
-        response.status,
-        responseData.code,
-        responseData.details
-      );
+      let errorData;
+      try {
+        errorData = await response.json();
+      } catch {
+        errorData = { error: `HTTP ${response.status}: ${response.statusText}` };
+      }
+      
+      // Handle specific error cases
+      if (response.status === 401) {
+        // Token expired or invalid - could trigger re-auth here
+        console.error('Authentication failed - token may be expired');
+      }
+      
+      throw new Error(errorData.error || `HTTP ${response.status}`);
     }
 
-    return responseData;
-  } catch (error) {
-    if (error instanceof ApiError) {
-      throw error;
+    // Handle empty responses
+    if (response.status === 204) {
+      return {}; // No content
     }
-    
-    // Network or other errors
-    throw new ApiError(
-      error instanceof Error ? error.message : 'Network error',
-      0
-    );
+
+    const contentType = response.headers.get('content-type');
+    if (contentType && contentType.includes('application/json')) {
+      return await response.json();
+    } else {
+      return await response.text();
+    }
+  } catch (error) {
+    console.error('API Request failed:', {
+      endpoint,
+      error: error.message,
+      token: !!token
+    });
+    throw error;
   }
 };
 
-// Booking API functions
+
 export const bookingAPI = {
   // Get all bookings with filters
   getBookings: async (params: {
-    filter?: 'upcoming' | 'past' | 'all';
+    filter?: string;
     page?: number;
     limit?: number;
     car_id?: string;
@@ -157,19 +128,20 @@ export const bookingAPI = {
     start_date?: string;
     end_date?: string;
     user_id?: string;
-  } = {}): Promise<{ bookings: Booking[]; pagination?: any }> => {
+  } = {}) => {
     const queryParams = new URLSearchParams();
     Object.entries(params).forEach(([key, value]) => {
-      if (value !== undefined) {
+      if (value !== undefined && value !== null) {
         queryParams.append(key, value.toString());
       }
     });
     
-    return apiRequest(`/bookings?${queryParams}`);
+    const endpoint = `/bookings${queryParams.toString() ? '?' + queryParams.toString() : ''}`;
+    return apiRequest(endpoint);
   },
 
   // Get booking by ID
-  getBooking: async (id: string): Promise<Booking> => {
+  getBooking: async (id: string) => {
     return apiRequest(`/bookings/${id}`);
   },
 
@@ -182,42 +154,168 @@ export const bookingAPI = {
     destination?: string;
     passenger_count?: number;
     notes?: string;
-  }): Promise<{ message: string; booking: Booking }> => {
+  }) => {
     return apiRequest('/bookings', {
       method: 'POST',
       body: JSON.stringify(bookingData),
     });
   },
 
-  // Update booking
-  updateBooking: async (id: string, updates: Partial<Booking>): Promise<{ message: string; booking: Booking }> => {
+  // Update booking (regular updates only - no status changes)
+  updateBooking: async (id: string, updates: {
+    start_time?: string;
+    end_time?: string;
+    reason?: string;
+    destination?: string;
+    passenger_count?: number;
+    notes?: string;
+    // Note: status is NOT allowed here - use approve/reject/cancel instead
+  }) => {
     return apiRequest(`/bookings/${id}`, {
       method: 'PUT',
       body: JSON.stringify(updates),
     });
   },
 
-  // Cancel booking
-  cancelBooking: async (id: string): Promise<{ message: string }> => {
+  // NEW: Approve booking (admin/fleet manager only)
+  approveBooking: async (id: string) => {
+    return apiRequest(`/bookings/${id}/approve`, {
+      method: 'POST',
+    });
+  },
+
+  // NEW: Reject booking (admin/fleet manager only)
+  rejectBooking: async (id: string, reason?: string) => {
+    return apiRequest(`/bookings/${id}/reject`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    });
+  },
+
+  // Cancel booking (user can cancel their own, admin can cancel any)
+  cancelBooking: async (id: string) => {
     return apiRequest(`/bookings/${id}`, {
       method: 'DELETE',
     });
   },
 
   // Get calendar data
-  getCalendarData: async (start: string, end: string): Promise<{ bookings: Booking[] }> => {
-    return apiRequest(`/bookings/calendar/data?start=${start}&end=${end}`);
+  getCalendarData: async (start: string, end: string) => {
+    return apiRequest(`/bookings/calendar/data?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`);
   },
 };
 
-// Car API functions
+// Cars API functions
 export const carAPI = {
+  // Get all cars with filters
   getCars: async (params: {
-    page?: number;
-    limit?: number;
     status?: string;
     available_only?: boolean;
-  } = {}): Promise<{ cars: Car[]; pagination?: any }> => {
+    page?: number;
+    limit?: number;
+  } = {}) => {
+    const queryParams = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => {
+      if (value !== undefined && value !== null) {
+        queryParams.append(key, value.toString());
+      }
+    });
+    
+    const endpoint = `/cars${queryParams.toString() ? '?' + queryParams.toString() : ''}`;
+    return apiRequest(endpoint);
+  },
+
+  // Get car by ID
+  getCar: async (id: string) => {
+    return apiRequest(`/cars/${id}`);
+  },
+
+  // Create new car (fleet managers only)
+  createCar: async (carData: {
+    make: string;
+    model: string;
+    year: number;
+    license_plate: string;
+    vin?: string;
+    seats: number;
+    trunk_size?: string;
+    fuel_type?: string;
+    transmission?: string;
+    color?: string;
+    parking_spot?: string;
+    current_mileage?: number;
+    daily_rate?: number;
+    notes?: string;
+  }) => {
+    return apiRequest('/cars', {
+      method: 'POST',
+      body: JSON.stringify(carData),
+    });
+  },
+
+  // Update car (fleet managers only)
+  updateCar: async (id: string, updates: any) => {
+    return apiRequest(`/cars/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(updates),
+    });
+  },
+
+  // Delete car (admins only)
+  deleteCar: async (id: string) => {
+    return apiRequest(`/cars/${id}`, {
+      method: 'DELETE',
+    });
+  },
+
+  // Check car availability
+  checkAvailability: async (carId: string, startTime: string, endTime: string) => {
+    return apiRequest(`/cars/availability/${carId}?start_time=${encodeURIComponent(startTime)}&end_time=${encodeURIComponent(endTime)}`);
+  },
+
+  // Assign car to user (fleet managers only)
+  assignCar: async (id: string, assignedTo: string | null) => {
+    return apiRequest(`/cars/${id}/assign`, {
+      method: 'PUT',
+      body: JSON.stringify({ assigned_to: assignedTo }),
+    });
+  },
+
+  // Get fleet statistics (fleet managers only)
+  getStats: async () => {
+    return apiRequest('/cars/stats/overview');
+  },
+};
+
+// Organization API functions - Enhanced
+export const organizationAPI = {
+  getMe: async () => {
+    return apiRequest('/organizations/me');
+  },
+
+  updateMe: async (updates: any) => {
+    return apiRequest('/organizations/me', {
+      method: 'PUT',
+      body: JSON.stringify(updates),
+    });
+  },
+
+  getStats: async () => {
+    return apiRequest('/organizations/stats');
+  },
+
+  getPlan: async () => {
+    return apiRequest('/organizations/plan');
+  },
+
+  updatePlan: async (pricingPlanId: string) => {
+    return apiRequest('/organizations/plan', {
+      method: 'PUT',
+      body: JSON.stringify({ pricing_plan_id: pricingPlanId }),
+    });
+  },
+
+  getBillingHistory: async (params: { page?: number; limit?: number } = {}) => {
     const queryParams = new URLSearchParams();
     Object.entries(params).forEach(([key, value]) => {
       if (value !== undefined) {
@@ -225,84 +323,18 @@ export const carAPI = {
       }
     });
     
-    return apiRequest(`/cars?${queryParams}`);
-  },
-
-  getCar: async (id: string): Promise<Car> => {
-    return apiRequest(`/cars/${id}`);
-  },
-
-  createCar: async (carData: Omit<Car, 'id' | 'organization_id' | 'created_at'>): Promise<{ message: string; car: Car }> => {
-    return apiRequest('/cars', {
-      method: 'POST',
-      body: JSON.stringify(carData),
-    });
-  },
-
-  updateCar: async (id: string, updates: Partial<Car>): Promise<{ message: string; car: Car }> => {
-    return apiRequest(`/cars/${id}`, {
-      method: 'PUT',
-      body: JSON.stringify(updates),
-    });
-  },
-
-  deleteCar: async (id: string): Promise<{ message: string }> => {
-    return apiRequest(`/cars/${id}`, {
-      method: 'DELETE',
-    });
-  },
-
-  checkAvailability: async (carId: string, startTime: string, endTime: string): Promise<{
-    available: boolean;
-    reason?: string;
-    conflicts?: any[];
-  }> => {
-    return apiRequest(`/cars/availability/${carId}?start_time=${startTime}&end_time=${endTime}`);
-  },
-
-  getFleetStats: async (): Promise<{
-    totalCars: number;
-    availableCars: number;
-    bookedCars: number;
-    maintenanceCars: number;
-    monthlyBookings: number;
-    completedBookings: number;
-    pendingBookings: number;
-    activeBookings: number;
-  }> => {
-    return apiRequest('/cars/stats/overview');
+    const endpoint = `/organizations/billing-history${queryParams.toString() ? '?' + queryParams.toString() : ''}`;
+    return apiRequest(endpoint);
   },
 };
 
-// Organization API functions
-export const organizationAPI = {
-  getMyOrganization: async (): Promise<any> => {
-    return apiRequest('/organizations/me');
-  },
-
-  updateMyOrganization: async (updates: any): Promise<{ message: string; organization: any }> => {
-    return apiRequest('/organizations/me', {
-      method: 'PUT',
-      body: JSON.stringify(updates),
-    });
-  },
-
-  getStats: async (): Promise<any> => {
-    return apiRequest('/organizations/stats');
-  },
-
-  getPlan: async (): Promise<any> => {
-    return apiRequest('/organizations/plan');
-  },
-};
-
-// Profile API functions
+// Profile API functions - Enhanced
 export const profileAPI = {
-  getMyProfile: async (): Promise<any> => {
+  getMe: async () => {
     return apiRequest('/profiles/me');
   },
 
-  updateMyProfile: async (updates: any): Promise<{ message: string; profile: any }> => {
+  updateMe: async (updates: any) => {
     return apiRequest('/profiles/me', {
       method: 'PUT',
       body: JSON.stringify(updates),
@@ -314,7 +346,34 @@ export const profileAPI = {
     limit?: number;
     role?: string;
     active_only?: boolean;
-  } = {}): Promise<{ profiles: any[]; pagination?: any }> => {
+  } = {}) => {
+    const queryParams = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => {
+      if (value !== undefined && value !== null) {
+        queryParams.append(key, value.toString());
+      }
+    });
+    
+    const endpoint = `/profiles${queryParams.toString() ? '?' + queryParams.toString() : ''}`;
+    return apiRequest(endpoint);
+  },
+
+  getProfile: async (id: string) => {
+    return apiRequest(`/profiles/${id}`);
+  },
+
+  updateProfile: async (id: string, updates: any) => {
+    return apiRequest(`/profiles/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(updates),
+    });
+  },
+
+  getStats: async () => {
+    return apiRequest('/profiles/stats/overview');
+  },
+
+  getUserBookings: async (id: string, params: { status?: string; limit?: number } = {}) => {
     const queryParams = new URLSearchParams();
     Object.entries(params).forEach(([key, value]) => {
       if (value !== undefined) {
@@ -322,54 +381,74 @@ export const profileAPI = {
       }
     });
     
-    return apiRequest(`/profiles?${queryParams}`);
+    const endpoint = `/profiles/${id}/bookings${queryParams.toString() ? '?' + queryParams.toString() : ''}`;
+    return apiRequest(endpoint);
   },
 
-  getUserStats: async (userId?: string): Promise<any> => {
-    const endpoint = userId ? `/profiles/${userId}/stats` : '/profiles/me/stats';
-    return apiRequest(endpoint);
+  getUserStats: async (id: string) => {
+    return apiRequest(`/profiles/${id}/stats`);
   },
 };
 
-// Auth API functions
+// Auth API functions - New
 export const authAPI = {
-  signUp: async (userData: any): Promise<any> => {
-    return apiRequest('/auth/signup', {
-      method: 'POST',
-      body: JSON.stringify(userData),
-    });
-  },
-
-  signIn: async (email: string, password: string): Promise<any> => {
+  signin: async (email: string, password: string) => {
     return apiRequest('/auth/signin', {
       method: 'POST',
       body: JSON.stringify({ email, password }),
     });
   },
 
-  signOut: async (): Promise<any> => {
+  signup: async (userData: any) => {
+    return apiRequest('/auth/signup', {
+      method: 'POST',
+      body: JSON.stringify(userData),
+    });
+  },
+
+  signout: async () => {
     return apiRequest('/auth/signout', {
       method: 'POST',
     });
   },
 
-  getMe: async (): Promise<any> => {
+  getMe: async () => {
     return apiRequest('/auth/me');
   },
 
-  refreshSession: async (): Promise<any> => {
+  getSession: async () => {
     return apiRequest('/auth/session');
+  },
+
+  changePassword: async (currentPassword: string, newPassword: string) => {
+    return apiRequest('/auth/change-password', {
+      method: 'PUT',
+      body: JSON.stringify({ currentPassword, newPassword }),
+    });
   },
 };
 
-// Export the main api object
+// Invite API functions
+export const inviteAPI = {
+  inviteUsers: async (inviteData: {
+    emails: string[];
+    role: string;
+    organization_id: string;
+    invited_by: string;
+  }) => {
+    return apiRequest('/invite-users', {
+      method: 'POST',
+      body: JSON.stringify(inviteData),
+    });
+  },
+};
+
+// Export organized API object
 export const api = {
+  auth: authAPI,
   bookings: bookingAPI,
   cars: carAPI,
   organizations: organizationAPI,
   profiles: profileAPI,
-  auth: authAPI,
+  invites: inviteAPI,
 };
-
-// Export utility functions (ApiError is already exported above)
-export { getAuthToken };

@@ -1,4 +1,4 @@
-// server.js - Updated with all new routes
+// server.js - Fixed with auth routes properly imported
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
@@ -6,7 +6,7 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const morgan = require('morgan');
 
-// Import routes
+// Import routes - FIX: Add auth routes import
 const { router: authRoutes } = require('./routes/auth');
 const bookingRoutes = require('./routes/bookings');
 const carRoutes = require('./routes/cars');
@@ -50,9 +50,9 @@ if (process.env.NODE_ENV === 'development') {
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// API Routes
+// API Routes - FIX: Include auth routes
 app.use('/api/health', healthRoutes);
-app.use('/api/auth', authRoutes);
+app.use('/api/auth', authRoutes);  // ← This was missing!
 app.use('/api/bookings', bookingRoutes);
 app.use('/api/cars', carRoutes);
 app.use('/api/profiles', profileRoutes);
